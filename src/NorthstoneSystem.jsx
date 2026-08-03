@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 import {
   LayoutGrid, FolderKanban, PlusCircle, Compass, Palette, Calculator, FileSignature,
@@ -9,6 +9,15 @@ import {
   Image as ImageIcon, CreditCard, Clock, Star, Share2, Copy, Pencil, Search, Wallet, Boxes, Layers, LogOut
 } from "lucide-react";
 import { useAuth } from "./lib/AuthProvider";
+import * as Projects from "./lib/data/projects";
+import * as Leads from "./lib/data/leads";
+import * as Events from "./lib/data/events";
+import * as Team from "./lib/data/team";
+import * as Portfolio from "./lib/data/portfolio";
+import * as Settings from "./lib/data/settings";
+import * as PricingToolData from "./lib/data/pricingTool";
+import { uploadPhoto, deletePhoto, getSignedPhotoUrl, PROJECT_PHOTOS_BUCKET } from "./lib/data/storage";
+import PhotoImg from "./components/PhotoImg";
 
 // ============================================================
 // BRAND TOKENS
@@ -778,7 +787,7 @@ function generateProposalDoc(proj, totals, portfolioPhotos) {
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:20px;">
         ${inspirationPhotos.map(ph => `
           <div style="border-radius:8px;overflow:hidden;">
-            <img src="${ph.dataUrl}" style="width:100%;height:130px;object-fit:cover;display:block;" />
+            <img src="${ph.url}" style="width:100%;height:130px;object-fit:cover;display:block;" />
             ${ph.caption ? `<div style="font-size:10.5px;color:#8a887f;margin-top:4px;">${ph.caption}</div>` : ""}
           </div>`).join("")}
       </div>
@@ -1042,7 +1051,7 @@ function DocPreviewModal({ doc, onClose }) {
 // MAIN APP
 // ============================================================
 export default function NorthstoneSystem() {
-  const { profile, role, signOut } = useAuth();
+  const { profile, role, user, signOut } = useAuth();
   const [mode, setMode] = useState(role === "client" ? "portal" : "team"); // team | portal
   const [screen, setScreen] = useState("dashboard"); // dashboard | newProject | survey | estimate | proposal
   const [projects, setProjects] = useState([]);
@@ -1101,40 +1110,69 @@ export default function NorthstoneSystem() {
     }
   };
 
-  // ---------- persistence: everything lives under ONE key so it's genuinely one system ----------
+  // ---------- initial load: pull everything from Supabase ----------
+  // RLS scopes this automatically per signed-in user — staff get
+  // everything, a client's fetchAllProjects() only ever returns their own
+  // project(s), leads/events/team come back empty for them rather than
+  // erroring. There's no bulk "save everything" effect anymore: each
+  // mutation below writes straight to the table/RPC it affects.
   useEffect(() => {
     (async () => {
       try {
-        const r = await window.storage.get("northstone:system");
-        if (r) {
-          const d = JSON.parse(r.value);
-          if (d.projects) setProjects(d.projects);
-          if (d.draft) setDraft(d.draft);
-          if (d.settings) setSettings(d.settings);
-          if (d.screen) setScreen(d.screen);
-          if (d.mode && !(role === "client" && d.mode === "team")) setMode(d.mode);
-          if (d.portalProjectId) setPortalProjectId(d.portalProjectId);
-          if (d.leads) setLeads(d.leads);
-          if (d.events) setEvents(d.events);
-          if (d.team) setTeam(d.team);
-          if (d.portfolioPhotos) setPortfolioPhotos(d.portfolioPhotos);
-        }
-      } catch (e) {}
+        const [fetchedProjects, fetchedLeads, fetchedEvents, fetchedTeam, fetchedPhotos, fetchedSettings] = await Promise.all([
+          Projects.fetchAllProjects(),
+          Leads.fetchLeads(),
+          Events.fetchEvents(),
+          Team.fetchTeamMembers(),
+          Portfolio.fetchPortfolioPhotos(),
+          Settings.fetchSettings(),
+        ]);
+        setProjects(fetchedProjects);
+        setLeads(fetchedLeads);
+        setEvents(fetchedEvents);
+        setTeam(fetchedTeam);
+        setPortfolioPhotos(fetchedPhotos);
+        setSettings(fetchedSettings);
+        if (role === "client" && fetchedProjects.length) setPortalProjectId(fetchedProjects[0].id);
+      } catch (e) {
+        flash("Couldn't load your data — check your connection and try reloading");
+      }
       setLoaded(true);
     })();
   }, []);
+
+  // Settings fields autosave on change with no explicit "Save" button, so
+  // debounce the write instead of firing one per keystroke. Skips the
+  // write that would otherwise fire the instant the fetched settings land.
+  const settingsLoadedRef = useRef(false);
   useEffect(() => {
     if (!loaded) return;
-    window.storage.set("northstone:system", JSON.stringify({ projects, draft, settings, screen, mode, portalProjectId, leads, events, team, portfolioPhotos })).catch(() => {});
-  }, [projects, draft, settings, screen, mode, portalProjectId, leads, events, team, portfolioPhotos, loaded]);
+    if (!settingsLoadedRef.current) { settingsLoadedRef.current = true; return; }
+    const t = setTimeout(() => {
+      Settings.saveSettings(settings).catch(() => flash("Couldn't save settings — check your connection"));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [settings, loaded]);
 
   // upsert current draft into the projects roster
+  // The one checkpoint every "save the draft" action goes through. Updates
+  // local state immediately (so the UI never waits on the network), then
+  // writes the project's core columns to Supabase in the background — same
+  // upsert semantics whether this is the first save (creates the row) or
+  // the hundredth (updates it). Child-table data (messages, variations,
+  // updates, tickets, referrals, visuals, assigned team) is NOT part of
+  // this — those are written directly by their own dedicated functions
+  // the moment they happen, not batched into this checkpoint.
   const syncDraft = (updated) => {
+    const isNew = !projects.some(p => p.id === updated.id);
     setDraft(updated);
     setProjects(ps => {
       const exists = ps.some(p => p.id === updated.id);
       return exists ? ps.map(p => p.id === updated.id ? updated : p) : [updated, ...ps];
     });
+    Projects.saveProjectCore(updated, isNew ? { createdBy: user?.id } : undefined).catch(() =>
+      flash("Couldn't save that change — check your connection")
+    );
   };
 
   // ---------- derived pricing for the active draft, from the DETAILED pricing tool ----------
@@ -1231,6 +1269,7 @@ export default function NorthstoneSystem() {
     if (draft.id === updated.id) setDraft(updated);
     setEditDetailsFor(null);
     flash("Project details updated");
+    Projects.saveProjectCore(updated).catch(() => flash("Couldn't save those details — check your connection"));
   };
   const markProjectLost = (proj, reason, notes) => {
     const updated = { ...proj, previousStatus: proj.status, status: "Lost", lostReason: reason, lostNotes: notes, lostAt: new Date().toISOString().slice(0, 10) };
@@ -1238,12 +1277,14 @@ export default function NorthstoneSystem() {
     if (draft.id === proj.id) setDraft(updated);
     setMarkLostFor(null);
     flash(`${proj.name} marked as lost`);
+    Projects.saveProjectCore(updated).catch(() => flash("Couldn't save that change — check your connection"));
   };
   const reactivateProject = (proj) => {
     const updated = { ...proj, status: proj.previousStatus || "Proposal Sent", previousStatus: null, lostReason: null, lostNotes: null, lostAt: null };
     setProjects(ps => ps.map(p => p.id === proj.id ? updated : p));
     if (draft.id === proj.id) setDraft(updated);
     flash(`${proj.name} reactivated`);
+    Projects.saveProjectCore(updated).catch(() => flash("Couldn't save that change — check your connection"));
   };
   const sendTeamMessage = (projId, text) => {
     if (!text.trim()) return;
@@ -1251,10 +1292,12 @@ export default function NorthstoneSystem() {
     setProjects(ps => ps.map(p => p.id === projId ? { ...p, messages: [...(p.messages || []), msg] } : p));
     if (draft.id === projId) setDraft(d => ({ ...d, messages: [...(d.messages || []), msg] }));
     setTeamMsgDraft("");
+    Projects.insertMessageStaff(projId, msg.text, user?.id).catch(() => flash("Couldn't send that message — check your connection"));
   };
   const resolveSupportTicket = (projId, ticketId) => {
     setProjects(ps => ps.map(p => p.id !== projId ? p : { ...p, supportTickets: (p.supportTickets || []).map(t => t.id === ticketId ? { ...t, status: "Resolved", resolvedAt: new Date().toISOString().slice(0, 10) } : t) }));
     if (draft.id === projId) setDraft(d => ({ ...d, supportTickets: (d.supportTickets || []).map(t => t.id === ticketId ? { ...t, status: "Resolved", resolvedAt: new Date().toISOString().slice(0, 10) } : t) }));
+    Projects.resolveSupportTicket(ticketId).catch(() => flash("Couldn't save that — check your connection"));
   };
 
   // ---------- construction progress: stage %, photo updates ----------
@@ -1272,58 +1315,93 @@ export default function NorthstoneSystem() {
     setNewUpdate(u => ({ ...u, uploading: true }));
     try {
       const dataUrl = await resizeImageFile(file);
-      setNewUpdate(u => ({ ...u, photo: dataUrl, uploading: false }));
+      setNewUpdate(u => ({ ...u, photo: dataUrl, photoFile: file, uploading: false }));
     } catch (e) {
       setNewUpdate(u => ({ ...u, uploading: false }));
       flash("Couldn't read that photo — try a different file");
     }
   };
-  const postSiteUpdate = () => {
+  const postSiteUpdate = async () => {
     if (!newUpdate.caption.trim() && !newUpdate.photo) { flash("Add a photo or a caption first"); return; }
-    const entry = { id: uid(), caption: newUpdate.caption.trim(), stage: newUpdate.stage, photo: newUpdate.photo, date: new Date().toISOString().slice(0, 10) };
-    syncDraft({ ...draft, updates: [entry, ...(draft.updates || [])] });
-    setNewUpdate({ caption: "", stage: "", photo: null, uploading: false });
-    flash("Update posted — visible in the Client Portal now");
+    try {
+      const path = newUpdate.photoFile ? await uploadPhoto(PROJECT_PHOTOS_BUCKET, `${draft.id}/updates`, newUpdate.photoFile) : null;
+      const entry = await Projects.insertSiteUpdate(draft.id, { stage: newUpdate.stage, caption: newUpdate.caption.trim(), path }, user?.id);
+      setDraft(d => ({ ...d, updates: [entry, ...(d.updates || [])] }));
+      setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, updates: [entry, ...(p.updates || [])] } : p));
+      setNewUpdate({ caption: "", stage: "", photo: null, photoFile: null, uploading: false });
+      flash("Update posted — visible in the Client Portal now");
+    } catch (e) {
+      flash("Couldn't post that update — check your connection");
+    }
   };
   const removeSiteUpdate = (id) => {
-    syncDraft({ ...draft, updates: (draft.updates || []).filter(u => u.id !== id) });
+    const target = (draft.updates || []).find(u => u.id === id);
+    setDraft(d => ({ ...d, updates: (d.updates || []).filter(u => u.id !== id) }));
+    setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, updates: (p.updates || []).filter(u => u.id !== id) } : p));
+    Projects.deleteSiteUpdate(id, target?.photo).catch(() => flash("Couldn't delete that update — check your connection"));
   };
 
   // ---------- design visuals: 2D plans & 3D renders shown in the Client Portal ----------
   const addDesignVisuals = async (kind, files) => {
     const list = Array.from(files || []);
     if (!list.length) return;
-    const resized = await Promise.all(list.map(f => resizeImageFile(f, 1400, 0.8)));
-    const dv = draft.designVisuals || { plans2d: [], renders3d: [] };
-    const newItems = resized.map(dataUrl => ({ id: uid(), dataUrl, caption: "" }));
-    syncDraft({ ...draft, designVisuals: { ...dv, [kind]: [...(dv[kind] || []), ...newItems] } });
-    flash("Visual uploaded — visible in the Client Portal now");
+    try {
+      const dv = draft.designVisuals || { plans2d: [], renders3d: [] };
+      const startPos = (dv[kind] || []).length;
+      const inserted = [];
+      for (let i = 0; i < list.length; i++) {
+        const path = await uploadPhoto(PROJECT_PHOTOS_BUCKET, `${draft.id}/visuals`, list[i]);
+        inserted.push(await Projects.insertVisual(draft.id, kind, path, startPos + i));
+      }
+      const updatedDv = { ...dv, [kind]: [...(dv[kind] || []), ...inserted] };
+      setDraft(d => ({ ...d, designVisuals: updatedDv }));
+      setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, designVisuals: updatedDv } : p));
+      flash("Visual uploaded — visible in the Client Portal now");
+    } catch (e) {
+      flash("Couldn't upload that visual — check your connection");
+    }
   };
   const updateDesignVisualCaption = (kind, id, caption) => {
     const dv = draft.designVisuals || { plans2d: [], renders3d: [] };
-    syncDraft({ ...draft, designVisuals: { ...dv, [kind]: (dv[kind] || []).map(v => v.id === id ? { ...v, caption } : v) } });
+    const updatedDv = { ...dv, [kind]: (dv[kind] || []).map(v => v.id === id ? { ...v, caption } : v) };
+    setDraft(d => ({ ...d, designVisuals: updatedDv }));
+    setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, designVisuals: updatedDv } : p));
+    Projects.updateVisualCaption(id, caption).catch(() => flash("Couldn't save that caption — check your connection"));
   };
   const removeDesignVisual = (kind, id) => {
     const dv = draft.designVisuals || { plans2d: [], renders3d: [] };
-    syncDraft({ ...draft, designVisuals: { ...dv, [kind]: (dv[kind] || []).filter(v => v.id !== id) } });
+    const target = (dv[kind] || []).find(v => v.id === id);
+    const updatedDv = { ...dv, [kind]: (dv[kind] || []).filter(v => v.id !== id) };
+    setDraft(d => ({ ...d, designVisuals: updatedDv }));
+    setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, designVisuals: updatedDv } : p));
+    Projects.deleteVisual(id, target?.path).catch(() => flash("Couldn't delete that visual — check your connection"));
   };
 
   // ---------- change orders / variations ----------
-  const addVariation = () => {
+  const addVariation = async () => {
     if (!newVariation.title.trim() || !newVariation.amount) { flash("Add a title and amount first"); return; }
-    const v = { id: uid(), title: newVariation.title.trim(), description: newVariation.description.trim(), amount: Number(newVariation.amount) || 0, status: "Pending", date: new Date().toISOString().slice(0, 10) };
-    syncDraft({ ...draft, variations: [v, ...(draft.variations || [])] });
-    setNewVariation({ title: "", description: "", amount: "" });
-    flash("Variation sent — client can approve it in their portal");
+    try {
+      const v = await Projects.insertVariation(draft.id, { title: newVariation.title.trim(), description: newVariation.description.trim(), amount: Number(newVariation.amount) || 0 });
+      setDraft(d => ({ ...d, variations: [v, ...(d.variations || [])] }));
+      setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, variations: [v, ...(p.variations || [])] } : p));
+      setNewVariation({ title: "", description: "", amount: "" });
+      flash("Variation sent — client can approve it in their portal");
+    } catch (e) {
+      flash("Couldn't send that variation — check your connection");
+    }
   };
   const deleteVariation = (id) => {
-    syncDraft({ ...draft, variations: (draft.variations || []).filter(v => v.id !== id) });
+    setDraft(d => ({ ...d, variations: (d.variations || []).filter(v => v.id !== id) }));
+    setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, variations: (p.variations || []).filter(v => v.id !== id) } : p));
+    Projects.deleteVariation(id).catch(() => flash("Couldn't delete that variation — check your connection"));
   };
   const respondVariation = (projId, variationId, status) => {
     setProjects(ps => ps.map(p => p.id !== projId ? p : { ...p, variations: (p.variations || []).map(v => v.id === variationId ? { ...v, status, respondedAt: new Date().toISOString().slice(0, 10) } : v) }));
     if (draft.id === projId) {
       setDraft(d => ({ ...d, variations: (d.variations || []).map(v => v.id === variationId ? { ...v, status, respondedAt: new Date().toISOString().slice(0, 10) } : v) }));
     }
+    const write = role === "staff" ? Projects.respondToVariationStaff(variationId, status) : Projects.respondToVariationAsClient(variationId, status);
+    write.catch(() => flash("Couldn't save that response — check your connection"));
   };
 
   // ---------- reviews & referrals ----------
@@ -1331,15 +1409,26 @@ export default function NorthstoneSystem() {
     const review = { rating, text, submittedAt: new Date().toISOString().slice(0, 10) };
     setProjects(ps => ps.map(p => p.id === projId ? { ...p, review } : p));
     if (draft.id === projId) setDraft(d => ({ ...d, review }));
+    const write = role === "staff"
+      ? Projects.saveProjectCore({ ...(projects.find(p => p.id === projId) || draft), review })
+      : Projects.submitReviewAsClient(projId, rating, text);
+    write.catch(() => flash("Couldn't save that review — check your connection"));
   };
-  const submitReferral = (projId, referral) => {
-    const entryId = uid();
-    const entry = { id: entryId, ...referral, submittedAt: new Date().toISOString().slice(0, 10), status: "Pending", rewardAmount: null, rewardedAt: null };
-    setProjects(ps => ps.map(p => p.id === projId ? { ...p, referrals: [...(p.referrals || []), entry] } : p));
-    if (draft.id === projId) setDraft(d => ({ ...d, referrals: [...(d.referrals || []), entry] }));
-    const referrerProj = projects.find(p => p.id === projId) || draft;
-    const lead = { id: uid(), name: referral.name, phone: referral.phone || "", email: referral.email || "", source: "Referral", notes: `Referred by ${referrerProj.client || "a client"}${referral.notes ? " — " + referral.notes : ""}`, status: "New", createdAt: new Date().toISOString(), referredByProjectId: projId, referralEntryId: entryId };
-    setLeads(ls => [lead, ...ls]);
+  const submitReferral = async (projId, referral) => {
+    try {
+      if (role === "staff") {
+        const { referral: entry, lead } = await Projects.insertReferralStaff(projId, referral, (projects.find(p => p.id === projId) || draft).client);
+        setProjects(ps => ps.map(p => p.id === projId ? { ...p, referrals: [...(p.referrals || []), entry] } : p));
+        if (draft.id === projId) setDraft(d => ({ ...d, referrals: [...(d.referrals || []), entry] }));
+        setLeads(ls => [lead, ...ls]);
+      } else {
+        const entry = await Projects.submitReferralAsClient(projId, referral);
+        setProjects(ps => ps.map(p => p.id === projId ? { ...p, referrals: [...(p.referrals || []), entry] } : p));
+        if (draft.id === projId) setDraft(d => ({ ...d, referrals: [...(d.referrals || []), entry] }));
+      }
+    } catch (e) {
+      flash("Couldn't submit that referral — check your connection");
+    }
   };
 
   // ---------- backup & restore ----------
@@ -1379,38 +1468,87 @@ export default function NorthstoneSystem() {
     reader.onerror = () => flash("Couldn't read that file");
     reader.readAsText(file);
   };
-  const confirmImport = () => {
+  // Restores projects (core columns), leads, events, team, and settings,
+  // preserving original ids so cross-references (event -> project, lead ->
+  // referring project) still resolve. Two things a backup can't bring
+  // back through this path: child-table data that didn't exist when the
+  // backup was taken (messages, variations, site updates, support
+  // tickets, referrals, design visuals) and portfolio photos (old backups
+  // hold them as base64, incompatible with the Storage-path model those
+  // now use) — both are skipped rather than imported broken.
+  const confirmImport = async () => {
     if (!pendingImport) return;
-    if (pendingImport.projects) setProjects(pendingImport.projects);
-    if (pendingImport.leads) setLeads(pendingImport.leads);
-    if (pendingImport.events) setEvents(pendingImport.events);
-    if (pendingImport.team) setTeam(pendingImport.team);
-    if (pendingImport.portfolioPhotos) setPortfolioPhotos(pendingImport.portfolioPhotos);
-    if (pendingImport.settings) setSettings(pendingImport.settings);
-    setPendingImport(null);
-    flash("Backup restored");
+    try {
+      if (pendingImport.projects) {
+        for (const proj of pendingImport.projects) {
+          await Projects.saveProjectCore({ ...proj, referredByProjectId: null, referralEntryId: null }, { createdBy: user?.id });
+        }
+      }
+      if (pendingImport.leads) await Leads.restoreLeads(pendingImport.leads);
+      if (pendingImport.events) await Events.restoreEvents(pendingImport.events);
+      if (pendingImport.team) await Team.restoreTeamMembers(pendingImport.team);
+      if (pendingImport.settings) await Settings.saveSettings(pendingImport.settings);
+
+      const [fetchedProjects, fetchedLeads, fetchedEvents, fetchedTeam, fetchedSettings] = await Promise.all([
+        Projects.fetchAllProjects(),
+        Leads.fetchLeads(),
+        Events.fetchEvents(),
+        Team.fetchTeamMembers(),
+        Settings.fetchSettings(),
+      ]);
+      setProjects(fetchedProjects);
+      setLeads(fetchedLeads);
+      setEvents(fetchedEvents);
+      setTeam(fetchedTeam);
+      setSettings(fetchedSettings);
+      setPendingImport(null);
+      flash("Backup restored — photos, messages, and change orders from the backup were not re-imported");
+    } catch (e) {
+      flash("Couldn't restore that backup — check your connection");
+    }
   };
 
   // ---------- portfolio photo library (feeds Design Inspiration in proposals) ----------
   const addPortfolioPhotos = async (files) => {
     const list = Array.from(files || []);
     if (!list.length) return;
-    const resized = await Promise.all(list.map(f => resizeImageFile(f)));
-    setPortfolioPhotos(pp => [...pp, ...resized.map(dataUrl => ({ id: uid(), dataUrl, caption: "" }))]);
+    try {
+      const uploaded = await Portfolio.addPortfolioPhotos(list);
+      setPortfolioPhotos(pp => [...pp, ...uploaded]);
+    } catch (e) {
+      flash("Couldn't upload those photos — check your connection");
+    }
   };
-  const updatePortfolioCaption = (id, caption) => setPortfolioPhotos(pp => pp.map(p => p.id === id ? { ...p, caption } : p));
-  const removePortfolioPhoto = (id) => setPortfolioPhotos(pp => pp.filter(p => p.id !== id));
+  const updatePortfolioCaption = (id, caption) => {
+    setPortfolioPhotos(pp => pp.map(p => p.id === id ? { ...p, caption } : p));
+    Portfolio.updatePortfolioCaption(id, caption).catch(() => flash("Couldn't save that caption — check your connection"));
+  };
+  const removePortfolioPhoto = (id) => {
+    const target = portfolioPhotos.find(p => p.id === id);
+    setPortfolioPhotos(pp => pp.filter(p => p.id !== id));
+    Portfolio.removePortfolioPhoto(id, target?.path).catch(() => flash("Couldn't delete that photo — check your connection"));
+  };
 
   // ---------- leads / enquiries ----------
-  const addLead = () => {
+  const addLead = async () => {
     if (!newLead.name.trim()) { flash("Enter a name to add this lead"); return; }
-    const lead = { id: uid(), ...newLead, name: newLead.name.trim(), status: "New", createdAt: new Date().toISOString() };
-    setLeads(ls => [lead, ...ls]);
-    setNewLead({ name: "", phone: "", email: "", source: "Phone Call", notes: "" });
-    flash(`${lead.name} added to leads`);
+    try {
+      const lead = await Leads.insertLead({ ...newLead, name: newLead.name.trim() }, user?.id);
+      setLeads(ls => [lead, ...ls]);
+      setNewLead({ name: "", phone: "", email: "", source: "Phone Call", notes: "" });
+      flash(`${lead.name} added to leads`);
+    } catch (e) {
+      flash("Couldn't add that lead — check your connection");
+    }
   };
-  const updateLeadStatus = (id, status) => setLeads(ls => ls.map(l => l.id === id ? { ...l, status } : l));
-  const deleteLead = (id) => setLeads(ls => ls.filter(l => l.id !== id));
+  const updateLeadStatus = (id, status) => {
+    setLeads(ls => ls.map(l => l.id === id ? { ...l, status } : l));
+    Leads.updateLeadStatus(id, status).catch(() => flash("Couldn't save that change — check your connection"));
+  };
+  const deleteLead = (id) => {
+    setLeads(ls => ls.filter(l => l.id !== id));
+    Leads.deleteLead(id).catch(() => flash("Couldn't delete that lead — check your connection"));
+  };
   const convertLead = (lead) => {
     const fresh = emptyDraft();
     fresh.client = lead.name;
@@ -1427,37 +1565,56 @@ export default function NorthstoneSystem() {
   };
 
   // ---------- calendar / scheduling ----------
-  const addEvent = () => {
+  const addEvent = async () => {
     if (!newEvent.title.trim() || !newEvent.date) { flash("Add a title and date first"); return; }
-    const ev = { id: uid(), ...newEvent, title: newEvent.title.trim() };
-    setEvents(es => [...es, ev]);
-    if ((ev.type === "Site Survey" || ev.type === "Site Visit") && ev.leadId) {
-      updateLeadStatus(ev.leadId, "Survey Booked");
+    try {
+      const ev = await Events.insertEvent({ ...newEvent, title: newEvent.title.trim() }, user?.id);
+      setEvents(es => [...es, ev]);
+      if ((ev.type === "Site Survey" || ev.type === "Site Visit") && ev.leadId) {
+        updateLeadStatus(ev.leadId, "Survey Booked");
+      }
+      setNewEvent({ title: "", type: "Site Visit", date: "", time: "", projectId: "", leadId: "", notes: "" });
+      flash("Event added to calendar");
+    } catch (e) {
+      flash("Couldn't add that event — check your connection");
     }
-    setNewEvent({ title: "", type: "Site Visit", date: "", time: "", projectId: "", leadId: "", notes: "" });
-    flash("Event added to calendar");
   };
-  const deleteEvent = (id) => setEvents(es => es.filter(e => e.id !== id));
+  const deleteEvent = (id) => {
+    setEvents(es => es.filter(e => e.id !== id));
+    Events.deleteEvent(id).catch(() => flash("Couldn't delete that event — check your connection"));
+  };
   const todayStr = () => new Date().toISOString().slice(0, 10);
   const sortedEvents = (list) => [...list].sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
 
   // ---------- team ----------
-  const addTeamMember = () => {
+  const addTeamMember = async () => {
     if (!newTeamMember.name.trim()) { flash("Enter a name first"); return; }
     const usedColors = team.map(t => t.color);
     const nextColor = TEAM_COLORS.find(c => !usedColors.includes(c)) || TEAM_COLORS[team.length % TEAM_COLORS.length];
-    setTeam(ts => [...ts, { id: uid(), ...newTeamMember, color: nextColor }]);
-    setNewTeamMember({ name: "", role: TEAM_ROLES[0], phone: "", email: "", color: TEAM_COLORS[0] });
-    flash("Team member added");
+    try {
+      const member = await Team.insertTeamMember({ ...newTeamMember, color: nextColor });
+      setTeam(ts => [...ts, member]);
+      setNewTeamMember({ name: "", role: TEAM_ROLES[0], phone: "", email: "", color: TEAM_COLORS[0] });
+      flash("Team member added");
+    } catch (e) {
+      flash("Couldn't add that team member — check your connection");
+    }
   };
   const removeTeamMember = (id) => {
     setTeam(ts => ts.filter(t => t.id !== id));
     setProjects(ps => ps.map(p => ({ ...p, assignedTeam: (p.assignedTeam || []).filter(tid => tid !== id) })));
+    Team.deleteTeamMember(id).catch(() => flash("Couldn't delete that team member — check your connection"));
   };
+  // assignedTeam lives in its own join table, not a project core column —
+  // don't route this through syncDraft, write the single row that changed.
   const toggleAssignedTeam = (memberId) => {
     const assignedTeam = draft.assignedTeam || [];
-    const updated = assignedTeam.includes(memberId) ? assignedTeam.filter(id => id !== memberId) : [...assignedTeam, memberId];
-    syncDraft({ ...draft, assignedTeam: updated });
+    const isAssigning = !assignedTeam.includes(memberId);
+    const updated = isAssigning ? [...assignedTeam, memberId] : assignedTeam.filter(id => id !== memberId);
+    setDraft(d => ({ ...d, assignedTeam: updated }));
+    setProjects(ps => ps.map(p => p.id === draft.id ? { ...p, assignedTeam: updated } : p));
+    const write = isAssigning ? Projects.addProjectTeamMember(draft.id, memberId) : Projects.removeProjectTeamMember(draft.id, memberId);
+    write.catch(() => flash("Couldn't update team assignment — check your connection"));
   };
 
   // ============================================================
@@ -1495,15 +1652,25 @@ export default function NorthstoneSystem() {
       return { ...d, survey };
     });
   };
+  // Survey photos upload to Storage immediately (so the file is safe even
+  // if the browser closes before the survey step is submitted), but the
+  // `survey` jsonb itself only reaches Supabase at the next syncDraft
+  // checkpoint (goToEstimate) — same timing as every other survey field.
   const setSurveyPhoto = async (name, file) => {
     if (!file) return;
-    const dataUrl = await resizeImageFile(file);
-    setDraft(d => ({ ...d, survey: { ...d.survey, photos: { ...d.survey.photos, [name]: dataUrl } } }));
+    try {
+      const path = await uploadPhoto(PROJECT_PHOTOS_BUCKET, `${draft.id}/survey`, file);
+      setDraft(d => ({ ...d, survey: { ...d.survey, photos: { ...d.survey.photos, [name]: path } } }));
+    } catch (e) {
+      flash("Couldn't upload that photo — check your connection");
+    }
   };
   const markSurveyPhotoChecked = (name) => setDraft(d => ({ ...d, survey: { ...d.survey, photos: { ...d.survey.photos, [name]: "checked" } } }));
   const removeSurveyPhoto = (name) => setDraft(d => {
     const photos = { ...d.survey.photos };
+    const existing = photos[name];
     delete photos[name];
+    if (existing && existing !== "checked") deletePhoto(PROJECT_PHOTOS_BUCKET, existing).catch(() => {});
     return { ...d, survey: { ...d.survey, photos } };
   });
   const toggleStyle = (st) => setDraft(d => ({ ...d, survey: { ...d.survey, vision: { ...d.survey.vision, style: d.survey.vision.style.includes(st) ? d.survey.vision.style.filter(x => x !== st) : [...d.survey.vision.style, st] } } }));
@@ -1523,6 +1690,9 @@ export default function NorthstoneSystem() {
   const addHighlight = () => setDraft(d => ({ ...d, proposal: { ...d.proposal, highlights: [...d.proposal.highlights, "New highlight"] } }));
   const updateHighlight = (i, v) => setDraft(d => ({ ...d, proposal: { ...d.proposal, highlights: d.proposal.highlights.map((h, idx) => idx === i ? v : h) } }));
   const removeHighlight = (i) => setDraft(d => ({ ...d, proposal: { ...d.proposal, highlights: d.proposal.highlights.filter((_, idx) => idx !== i) } }));
+  // Only reachable from the staff-side proposal wizard (capturing a
+  // signature in person/on a call) — there's no remote client-signing flow
+  // in this app today, so this is always a staff action.
   const signProposal = () => {
     const code = draft.referralCode || generateReferralCode(draft);
     const updated = { ...draft, signature: { ...draft.signature, signed: true, date: draft.signature.date || new Date().toISOString().slice(0, 10) }, status: "Signed", referralCode: code };
@@ -1534,6 +1704,7 @@ export default function NorthstoneSystem() {
         referrals: (p.referrals || []).map(r => r.id === draft.referralEntryId ? { ...r, status: "Rewarded", rewardAmount: settings.referralRewardAmount, rewardedAt: rewardDate } : r),
       }));
       flash(`Signed! £${settings.referralRewardAmount} referral reward credited to ${projects.find(p => p.id === draft.referredByProjectId)?.client || "the referrer"}`);
+      Projects.rewardReferral(draft.referralEntryId, settings.referralRewardAmount).catch(() => flash("Signed, but couldn't record the referral reward — check your connection"));
     }
   };
 
@@ -1542,28 +1713,49 @@ export default function NorthstoneSystem() {
   // ============================================================
   const portalProject = projects.find(p => p.id === portalProjectId) || draft;
   const portalTotals = totalsFor(portalProject);
+  // The portal UI below is reached by two different people: a real client
+  // (own project only, via the submit_*/respond_to_variation RPCs — see
+  // supabase/migrations) and staff previewing via the Client Portal toggle
+  // (full access, direct table writes). Every action here branches on
+  // `role` for that reason.
   const sendPortalMessage = () => {
     if (!portalDraft.trim()) return;
-    const updated = { ...portalProject, messages: [...(portalProject.messages || []), { id: uid(), from: "client", text: portalDraft.trim(), when: "Just now" }] };
+    const text = portalDraft.trim();
+    const updated = { ...portalProject, messages: [...(portalProject.messages || []), { id: uid(), from: "client", text, when: "Just now" }] };
     setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
     if (draft.id === updated.id) setDraft(updated);
     setPortalDraft("");
+    const write = role === "staff" ? Projects.insertMessageStaff(portalProject.id, text, user?.id) : Projects.sendMessageAsClient(portalProject.id, text);
+    write.catch(() => flash("Couldn't send that message — check your connection"));
   };
   const markPaid = (idx) => {
+    if (role !== "staff") {
+      flash("Online payment isn't connected yet — contact Northstone to arrange payment");
+      return;
+    }
     const updated = { ...portalProject, payments: { ...(portalProject.payments || {}), [idx]: true } };
     setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
     if (draft.id === updated.id) setDraft(updated);
+    Projects.saveProjectCore(updated).catch(() => flash("Couldn't save that change — check your connection"));
   };
   const dismissPortalWelcome = () => {
     const updated = { ...portalProject, portalWelcomed: true };
     setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
     if (draft.id === updated.id) setDraft(updated);
+    const write = role === "staff" ? Projects.saveProjectCore(updated) : Projects.dismissPortalWelcomeAsClient(portalProject.id);
+    write.catch(() => {});
   };
-  const submitSupportTicket = (subject, description) => {
-    const ticket = { id: uid(), subject, description, status: "Open", createdAt: new Date().toISOString().slice(0, 10) };
-    const updated = { ...portalProject, supportTickets: [ticket, ...(portalProject.supportTickets || [])] };
-    setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
-    if (draft.id === updated.id) setDraft(updated);
+  const submitSupportTicket = async (subject, description) => {
+    try {
+      const ticket = role === "staff"
+        ? await Projects.insertSupportTicketStaff(portalProject.id, subject, description)
+        : await Projects.submitSupportTicketAsClient(portalProject.id, subject, description);
+      const updated = { ...portalProject, supportTickets: [ticket, ...(portalProject.supportTickets || [])] };
+      setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
+      if (draft.id === updated.id) setDraft(updated);
+    } catch (e) {
+      flash("Couldn't submit that ticket — check your connection");
+    }
   };
   const overallProgress = Math.round(Object.values(portalProject.timeline || {}).reduce((s, v) => s + v, 0) / TIMELINE_STAGES.length) || 0;
 
@@ -1579,6 +1771,14 @@ export default function NorthstoneSystem() {
       <button onClick={() => { if (!portalProjectId && projects.length) setPortalProjectId(projects[0].id); setMode("portal"); }} style={{ padding: "7px 16px", borderRadius: 24, border: "none", background: mode === "portal" ? FOREST : "transparent", color: mode === "portal" ? "#fff" : INK, fontSize: 12.5, fontWeight: 700 }}>Client Portal</button>
     </div>
   );
+
+  if (!loaded) {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: PARCHMENT, color: INK, fontFamily: "'Inter', system-ui, sans-serif", fontSize: 13 }}>
+        Loading…
+      </div>
+    );
+  }
 
   // ============================================================
   // ================= CLIENT PORTAL MODE ======================
@@ -1735,7 +1935,7 @@ export default function NorthstoneSystem() {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
                   {(portalProject.updates || []).filter(u => u.photo).map(u => (
                     <div key={u.id} style={{ background: "#fff", borderRadius: 12, overflow: "hidden", border: "1px solid #eae6db" }}>
-                      <img src={u.photo} alt={u.caption || "Site photo"} style={{ width: "100%", height: 160, objectFit: "cover" }} />
+                      <PhotoImg path={u.photo} alt={u.caption || "Site photo"} style={{ width: "100%", height: 160, objectFit: "cover" }} />
                       <div style={{ padding: 12 }}>
                         {u.stage && <div style={{ fontSize: 10.5, color: GOLD, fontWeight: 700 }}>{u.stage}</div>}
                         <div style={{ fontSize: 13, fontWeight: 600 }}>{u.caption || "Site update"}</div>
@@ -1767,7 +1967,7 @@ export default function NorthstoneSystem() {
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
                         {items.map(v => (
                           <div key={v.id} onClick={() => setVisualLightbox({ ...v, label })} style={{ background: "#fff", borderRadius: 12, overflow: "hidden", border: "1px solid #eae6db", cursor: "pointer" }}>
-                            <img src={v.dataUrl} alt={v.caption || label} style={{ width: "100%", height: 150, objectFit: "cover" }} />
+                            <PhotoImg path={v.path} alt={v.caption || label} style={{ width: "100%", height: 150, objectFit: "cover" }} />
                             {v.caption && <div style={{ padding: 10, fontSize: 12, fontWeight: 600 }}>{v.caption}</div>}
                           </div>
                         ))}
@@ -1785,7 +1985,7 @@ export default function NorthstoneSystem() {
           {visualLightbox && (
             <div onClick={() => setVisualLightbox(null)} style={{ position: "fixed", inset: 0, background: "rgba(10,20,15,0.88)", zIndex: 9999, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24, cursor: "zoom-out" }}>
               <div onClick={e => e.stopPropagation()} style={{ maxWidth: "min(90vw, 1000px)", maxHeight: "85vh", display: "flex", flexDirection: "column", alignItems: "center" }}>
-                <img src={visualLightbox.dataUrl} alt={visualLightbox.caption || visualLightbox.label} style={{ maxWidth: "100%", maxHeight: "78vh", objectFit: "contain", borderRadius: 8, boxShadow: "0 10px 40px rgba(0,0,0,0.4)" }} />
+                <PhotoImg path={visualLightbox.path} alt={visualLightbox.caption || visualLightbox.label} style={{ maxWidth: "100%", maxHeight: "78vh", objectFit: "contain", borderRadius: 8, boxShadow: "0 10px 40px rgba(0,0,0,0.4)" }} />
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%", marginTop: 14 }}>
                   <div style={{ color: "#fff" }}>
                     <div style={{ fontSize: 10.5, color: GOLD, letterSpacing: 0.5, textTransform: "uppercase" }}>{visualLightbox.label}</div>
@@ -2254,7 +2454,7 @@ export default function NorthstoneSystem() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
               {portfolioPhotos.map(p => (
                 <div key={p.id} style={{ border: "1px solid #eae6db", borderRadius: 8, overflow: "hidden", background: "#fafaf7" }}>
-                  <img src={p.dataUrl} alt="" style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }} />
+                  <img src={p.url} alt="" style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }} />
                   <input value={p.caption} onChange={e => updatePortfolioCaption(p.id, e.target.value)} placeholder="Caption (optional)" style={{ width: "100%", border: "none", borderTop: "1px solid #eae6db", padding: "6px 8px", fontSize: 10.5, fontFamily: "inherit", boxSizing: "border-box" }} />
                   <div onClick={() => removePortfolioPhoto(p.id)} style={{ fontSize: 10, color: "#a33", textAlign: "center", padding: "4px 0", cursor: "pointer", borderTop: "1px solid #eae6db" }}>Remove</div>
                 </div>
@@ -2917,7 +3117,7 @@ export default function NorthstoneSystem() {
                     <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
                       {items.map(v => (
                         <div key={v.id} style={{ width: 110, border: "1px solid #eae6db", borderRadius: 8, overflow: "hidden", background: "#fafaf7" }}>
-                          <img src={v.dataUrl} alt="" style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }} />
+                          <PhotoImg path={v.path} alt="" style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }} />
                           <input value={v.caption} onChange={e => updateDesignVisualCaption(kind, v.id, e.target.value)} placeholder="Caption" style={{ width: "100%", border: "none", borderTop: "1px solid #eae6db", padding: "5px 7px", fontSize: 10.5, fontFamily: "inherit", boxSizing: "border-box" }} />
                           <div onClick={() => removeDesignVisual(kind, v.id)} style={{ fontSize: 10, color: "#a33", textAlign: "center", padding: "4px 0", cursor: "pointer", borderTop: "1px solid #eae6db" }}>Remove</div>
                         </div>
@@ -2994,7 +3194,7 @@ export default function NorthstoneSystem() {
               {(draft.updates || []).length === 0 && <div style={{ fontSize: 12.5, color: "#9a978c" }}>No updates posted yet.</div>}
               {(draft.updates || []).map(u => (
                 <div key={u.id} style={{ display: "flex", gap: 10, marginBottom: 14, paddingBottom: 14, borderBottom: "1px solid #f3f1e9" }}>
-                  {u.photo ? <img src={u.photo} alt="" style={{ width: 54, height: 54, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 54, height: 54, borderRadius: 8, background: "#f1efe7", flexShrink: 0 }} />}
+                  {u.photo ? <PhotoImg path={u.photo} alt="" style={{ width: 54, height: 54, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} /> : <div style={{ width: 54, height: 54, borderRadius: 8, background: "#f1efe7", flexShrink: 0 }} />}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {u.stage && <div style={{ fontSize: 10.5, color: GOLD, fontWeight: 700 }}>{u.stage}</div>}
                     <div style={{ fontSize: 12.5 }}>{u.caption || <span style={{ color: "#9a978c" }}>Photo update</span>}</div>
@@ -3169,7 +3369,7 @@ export default function NorthstoneSystem() {
                     <div key={name} style={{ border: `1.5px solid ${got ? "#1f5b3f" : "#eae6db"}`, borderRadius: 10, padding: got ? 8 : 14, textAlign: "center", background: got ? "#f2f8f4" : "#fafaf7", position: "relative" }}>
                       {hasPhoto ? (
                         <>
-                          <img src={got} alt={name} style={{ width: "100%", height: 90, objectFit: "cover", borderRadius: 6, marginBottom: 6 }} />
+                          <PhotoImg path={got} alt={name} style={{ width: "100%", height: 90, objectFit: "cover", borderRadius: 6, marginBottom: 6 }} />
                           <div style={{ fontSize: 11, fontWeight: 600 }}>{name}</div>
                           <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 6 }}>
                             <label htmlFor={inputId} style={{ fontSize: 10, color: "#1f5b3f", cursor: "pointer", textDecoration: "underline" }}>Replace</label>
@@ -3527,6 +3727,7 @@ export default function NorthstoneSystem() {
 // with tiered rates, price ranges, suppliers & saved quotes.
 // ============================================================
 function PricingToolScreen({ ModeSwitch, onBack }) {
+  const { user } = useAuth();
   const [tab, setTab] = useState("calc"); // calc | suppliers | saved
   const [itemState, setItemState] = useState(() => {
     const s = {};
@@ -3549,8 +3750,7 @@ function PricingToolScreen({ ModeSwitch, onBack }) {
   useEffect(() => {
     (async () => {
       try {
-        const r = await window.storage.get("supplier-contacts");
-        if (r) setContactInfo(JSON.parse(r.value));
+        setContactInfo(await PricingToolData.fetchSupplierContacts());
       } catch (e) {}
     })();
   }, []);
@@ -3574,13 +3774,13 @@ function PricingToolScreen({ ModeSwitch, onBack }) {
   const updateContact = async (supplierId, field, value) => {
     const updated = { ...contactInfo, [supplierId]: { ...(contactInfo[supplierId] || {}), [field]: value } };
     setContactInfo(updated);
-    try { await window.storage.set("supplier-contacts", JSON.stringify(updated)); flash("Contact saved"); } catch (e) {}
+    try { await PricingToolData.saveSupplierContact(supplierId, updated[supplierId]); flash("Contact saved"); } catch (e) { flash("Couldn't save that contact — check your connection"); }
   };
 
   const saveQuote = async () => {
     if (!quoteName.trim()) { flash("Enter a job/quote name first"); return; }
     try {
-      await window.storage.set(`quote:${quoteName.trim()}`, JSON.stringify({ name: quoteName.trim(), savedAt: new Date().toISOString(), itemState, poaState }));
+      await PricingToolData.saveQuote(quoteName.trim(), itemState, poaState, user?.id);
       setLoadedTag(`Loaded: ${quoteName.trim()}`);
       flash(`Quote saved: ${quoteName.trim()}`);
     } catch (e) { flash("Error saving quote"); }
@@ -3594,22 +3794,18 @@ function PricingToolScreen({ ModeSwitch, onBack }) {
   };
   const loadSavedList = async () => {
     try {
-      const r = await window.storage.list("quote:");
-      setSavedKeys((r && r.keys) || []);
+      setSavedKeys(await PricingToolData.fetchSavedQuoteList());
     } catch (e) { setSavedKeys([]); }
   };
-  const openQuote = async (key) => {
+  const openQuote = async (id) => {
     try {
-      const r = await window.storage.get(key);
-      if (r && r.value) {
-        const d = JSON.parse(r.value);
-        setItemState(d.itemState); setPoaState(d.poaState); setQuoteName(d.name); setLoadedTag(`Loaded: ${d.name}`);
-        setTab("calc");
-      }
+      const d = await PricingToolData.fetchSavedQuote(id);
+      setItemState(d.itemState); setPoaState(d.poaState); setQuoteName(d.name); setLoadedTag(`Loaded: ${d.name}`);
+      setTab("calc");
     } catch (e) { flash("Could not load quote"); }
   };
-  const deleteQuote = async (key) => {
-    try { await window.storage.delete(key); loadSavedList(); } catch (e) { flash("Could not delete"); }
+  const deleteQuote = async (id) => {
+    try { await PricingToolData.deleteSavedQuote(id); loadSavedList(); } catch (e) { flash("Could not delete"); }
   };
 
   useEffect(() => { if (tab === "saved") loadSavedList(); }, [tab]);
@@ -3773,11 +3969,11 @@ function PricingToolScreen({ ModeSwitch, onBack }) {
         {tab === "saved" && (
           <div>
             {savedKeys.length === 0 && <div style={{ fontSize: 13, color: "#9a978c" }}>No saved quotes yet — save one from the Calculator tab.</div>}
-            {savedKeys.map(key => (
-              <div key={key} style={{ display: "flex", alignItems: "center", gap: 10, background: "#fff", border: "1px solid #eae6db", borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
-                <div style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{key.replace("quote:", "")}</div>
-                <button onClick={() => openQuote(key)} style={{ padding: "7px 14px", border: "1px solid #ddd8ca", background: "#fff", borderRadius: 7, fontSize: 12 }}>Open</button>
-                <button onClick={() => deleteQuote(key)} style={{ padding: "7px 14px", border: "1px solid #c0392b", color: "#c0392b", background: "#fff", borderRadius: 7, fontSize: 12 }}>Delete</button>
+            {savedKeys.map(q => (
+              <div key={q.id} style={{ display: "flex", alignItems: "center", gap: 10, background: "#fff", border: "1px solid #eae6db", borderRadius: 8, padding: "12px 14px", marginBottom: 8 }}>
+                <div style={{ flex: 1, fontWeight: 600, fontSize: 13.5 }}>{q.name}</div>
+                <button onClick={() => openQuote(q.id)} style={{ padding: "7px 14px", border: "1px solid #ddd8ca", background: "#fff", borderRadius: 7, fontSize: 12 }}>Open</button>
+                <button onClick={() => deleteQuote(q.id)} style={{ padding: "7px 14px", border: "1px solid #c0392b", color: "#c0392b", background: "#fff", borderRadius: 7, fontSize: 12 }}>Delete</button>
               </div>
             ))}
           </div>

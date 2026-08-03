@@ -18,11 +18,13 @@ src/
   App.jsx                Top-level app: AuthProvider + AuthGate
   AuthGate.jsx            Decides login/signup/reset vs. the real app based on auth state
   NorthstoneSystem.jsx    The full app (prototype, ported as-is for now)
+  components/
+    PhotoImg.jsx           Resolves a project-photos Storage path to a signed URL and renders it
   lib/
     supabaseClient.js     Supabase client, reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
     AuthProvider.jsx       Auth context: session, profile (role), sign in/up/out, password reset
     brand.js                Shared brand tokens/styles used by the auth screens
-    storagePolyfill.js     Temporary localStorage-backed shim for window.storage
+    data/                   All Supabase reads/writes — see "Data layer" below
   screens/
     auth/                  LoginScreen, SignUpScreen, ForgotPasswordScreen, ResetPasswordScreen
 public/
@@ -32,15 +34,13 @@ supabase/
   migrations/               SQL schema, RLS policies, and client-portal RPC functions
 ```
 
-`NorthstoneSystem.jsx` currently holds the whole app (all screens, all state)
-as it was ported from the original single-file prototype. It reads/writes
-data through `window.storage`, an API that only exists in the claude.ai
-sandbox the prototype was built in. `lib/storagePolyfill.js` polyfills that
-API on top of `localStorage` so the app runs standalone. This is scaffolding,
-not the real data layer — the next phase of work is migrating each feature
-(projects, leads, quotes, team, etc.) off `window.storage`/local state and
-onto Supabase tables with proper auth, and splitting this file into smaller
-components as that happens.
+`NorthstoneSystem.jsx` still holds the whole app (all screens, all UI state)
+as it was ported from the original single-file prototype — that part hasn't
+changed. What has changed: it no longer touches `window.storage` or
+`localStorage` at all. Every read on load and every mutation goes through
+`src/lib/data/*`, which wraps real Supabase table/RPC calls. Splitting
+`NorthstoneSystem.jsx` itself into smaller components is still open — this
+pass focused on the data layer underneath it, not restructuring the file.
 
 ## Database schema (Supabase)
 
@@ -73,19 +73,12 @@ marked "Rewarded") all behave as designed.
 
 **Design decisions worth knowing:**
 - Structured, frequently-filtered data (status, dates, foreign keys) is real
-  columns/tables. Free-form nested content the prototype already treats as a
-  document — survey answers, proposal copy, pricing selections, timeline
+  columns/tables. Free-form nested content the prototype already treated as
+  a document — survey answers, proposal copy, pricing selections, timeline
   percentages — stays `jsonb`, matching the shape `NorthstoneSystem.jsx`
-  already reads/writes, so wiring up Supabase later is closer to a
-  find-and-replace of `window.storage` calls than a data-model rewrite.
-- **Photos are not stored as base64.** The prototype currently inlines data
-  URLs (`resizeImageFile`); every photo column here (`storage_path` on
-  `project_visuals`, `project_site_updates`, `portfolio_photos`, plus the
-  values in `survey.photos`) expects a Supabase Storage path instead.
-  Buckets to create before wiring up uploads: `project-photos` (survey
-  photos, site updates, design visuals — private, access via the same
-  staff/client rules as the owning project) and `portfolio-photos` (public
-  read, staff write).
+  already reads/writes (see "Data layer" below for how that's wired up).
+- Photos are stored as Supabase Storage paths, not base64 — see "Data
+  layer" below for the two buckets this requires.
 - The pricing catalogue (`PRICING_CATEGORIES` — labour/plant/materials
   rates & costs) stays in frontend code for now; `projects.pricing` only
   stores each project's *selections* against it. Moving the catalogue itself
@@ -120,10 +113,9 @@ Two ways in, matching the `staff`/`client` roles from the schema above:
 - **Clients self sign-up** from the "Client? Create an account" link on the
   login screen (email + password + name). `handle_new_user` defaults any
   sign-up without role metadata to `role: "client"`. A new client account
-  isn't linked to a project yet — that link (`projects.client_user_id`) gets set
-  by staff. There's no in-app "link client to project" action yet since
-  project data doesn't live in Supabase until the next phase of work (see
-  the `NorthstoneSystem.jsx` note above); for now, set it directly via SQL:
+  isn't linked to a project yet — that link (`projects.client_user_id`) gets
+  set by staff. There's no in-app "link client to project" screen yet
+  (a reasonable next addition); for now, set it directly via SQL:
   `update projects set client_user_id = (select id from profiles where email = '...') where id = '...';`
 - **Forgot/reset password** works for both roles via Supabase's standard
   email-link flow (`resetPasswordForEmail` → link to `/reset-password` →
@@ -137,6 +129,64 @@ Two ways in, matching the `staff`/`client` roles from the schema above:
   built-in email service by default, which is rate-limited and fine for
   testing but not production — swap in a custom SMTP provider under
   **Dashboard → Authentication → Emails** before going live.
+
+## Data layer
+
+Everything in `src/lib/data/` follows the same shape: fetch functions map
+DB rows (snake_case, relational children) to the camelCase/nested shape
+`NorthstoneSystem.jsx` already expects, and mutation functions do the
+reverse. The app fetches everything once on load (`fetchAllProjects()` plus
+leads/events/team/portfolio/settings, run in parallel) — no `window.storage`,
+no `localStorage`, no bulk "save everything" effect. Each user action writes
+straight to the specific table or RPC it affects, right when it happens:
+
+- **`projects.js`** is the biggest one. `saveProjectCore()` is the single
+  checkpoint every "save the draft" action goes through (matches the
+  prototype's original `syncDraft()` timing exactly — e.g. survey answers
+  still don't hit the database until the survey's final review step, same
+  as before). Everything else — messages, variations, site updates, support
+  tickets, referrals, design visuals, assigned team — writes directly to
+  its own table the moment it happens, since those live in child tables,
+  not the `projects` row's jsonb columns.
+- **Staff vs. client branching**: several actions (sending a portal
+  message, approving a variation, leaving a review, raising a support
+  ticket, submitting a referral, dismissing the welcome modal) are reachable
+  by two different people — a real client (their own project only) and
+  staff previewing via the "Client Portal" toggle (full access). Each of
+  these branches on `role` from `useAuth()`: staff get a direct table
+  write, clients go through the matching `security definer` RPC from the
+  schema migration. `signProposal` doesn't need this — it's only reachable
+  from the staff-side wizard (capturing a signature in person/on a call),
+  there's no remote client-signing flow in this app.
+- **`markPaid`** ("Pay Now" in the client portal) is staff-only for now — a
+  client clicking it sees "online payment isn't connected yet, contact
+  Northstone" rather than a fake instant success. Wiring up a real payment
+  provider is future work; self-reporting your own payment as received
+  isn't something worth building in the meantime.
+- **Photos** upload to Supabase Storage instead of inlining base64. Two
+  buckets are required — create them before uploading anything:
+  - `project-photos` — **private**. Survey photos, site-update photos, and
+    design visuals. Every display resolves a signed URL on the fly via
+    `<PhotoImg path={...} />` (`src/components/PhotoImg.jsx`), cached
+    in-memory per path.
+  - `portfolio-photos` — **public read**. The proposal "design inspiration"
+    gallery — no signing needed, `getPublicPhotoUrl()` is synchronous
+    string construction.
+- **Backup/restore**: export still works unchanged (it just serializes
+  current in-memory state). Import now does more than the prototype's
+  local-only restore — it upserts projects/leads/events/team/settings into
+  Supabase, preserving original ids so references between them (an event's
+  `projectId`, a lead's `referredByProjectId`) still resolve. It does not
+  restore child-table data that didn't exist in the old local-storage
+  format (messages, variations, site updates, support tickets, referrals,
+  design visuals) or portfolio photos (old backups hold those as base64,
+  incompatible with the Storage-path model) — those are skipped rather than
+  imported broken.
+- **Dropped, not carried forward**: the prototype persisted which screen/
+  tab you were on and which mode (team/portal) across reloads. That was
+  tied to the old single-blob `window.storage` key and wasn't re-implemented
+  — the app now just opens to a sensible default (dashboard for staff, your
+  own portal for clients) on every load.
 
 ## Getting started
 
