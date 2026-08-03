@@ -205,6 +205,12 @@ npm run preview    # preview the production build locally
 
 ## Deploying to Cloudflare Pages
 
-- Build command: `npm run build`
-- Build output directory: `dist`
-- Environment variables: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (set in the Pages project's dashboard, not committed)
+**Cloudflare Dashboard → Workers & Pages → Create application → Pages → Connect to Git**, authorize GitHub if needed, and select this repo. Then:
+
+- **Production branch**: whichever branch you want live — there's no `main` yet, everything so far has been developed on `claude/northstone-app-setup-kzjs3g`, and Pages is happy to treat any branch as production. Merge to `main` first if you'd rather keep that convention; not required.
+- **Framework preset**: Vite (or leave as None and set the two fields below manually — either works)
+- **Build command**: `npm run build`
+- **Build output directory**: `dist`
+- **Environment variables** (Settings → Environment variables, set for both Production and Preview): `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` — same values as `.env.local`, not committed to the repo.
+
+**One gotcha:** Supabase Auth checks outgoing links (password reset, email confirmation) against an allowlist under **your Supabase project's Dashboard → Authentication → URL Configuration**. Add your Cloudflare Pages URL there (the `*.pages.dev` one Cloudflare assigns, plus any custom domain you add later) as both the **Site URL** and in **Redirect URLs** — otherwise those emailed links will point at the wrong place or get rejected. `public/_redirects` already handles client-side routing (all paths serve `index.html`), so no extra Cloudflare config is needed for that part.
