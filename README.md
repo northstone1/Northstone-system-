@@ -7,7 +7,7 @@ a client portal.
 ## Stack
 
 - **React + Vite** (JavaScript)
-- **Supabase** — database & auth (not yet wired up, see below)
+- **Supabase** — database & auth
 - **Cloudflare Pages** — hosting
 
 ## Project structure
@@ -15,11 +15,16 @@ a client portal.
 ```
 src/
   main.jsx              Vite entry point
-  App.jsx                Top-level app, loads storage polyfill + renders NorthstoneSystem
+  App.jsx                Top-level app: AuthProvider + AuthGate
+  AuthGate.jsx            Decides login/signup/reset vs. the real app based on auth state
   NorthstoneSystem.jsx    The full app (prototype, ported as-is for now)
   lib/
     supabaseClient.js     Supabase client, reads VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
+    AuthProvider.jsx       Auth context: session, profile (role), sign in/up/out, password reset
+    brand.js                Shared brand tokens/styles used by the auth screens
     storagePolyfill.js     Temporary localStorage-backed shim for window.storage
+  screens/
+    auth/                  LoginScreen, SignUpScreen, ForgotPasswordScreen, ResetPasswordScreen
 public/
   _redirects              SPA fallback routing for Cloudflare Pages
 supabase/
@@ -97,6 +102,41 @@ To apply these migrations to a real Supabase project:
 npx supabase link --project-ref <your-project-ref>
 npx supabase db push
 ```
+
+## Auth
+
+Two ways in, matching the `staff`/`client` roles from the schema above:
+
+- **Staff sign in with email + password.** There's no public staff sign-up
+  screen on purpose — you (the owner) create staff accounts directly in
+  Supabase: **Dashboard → Authentication → Users → Add user**, set an email
+  and password, and under user metadata add
+  `{"role": "staff", "full_name": "Their Name"}`. The `handle_new_user`
+  trigger reads that metadata and creates the matching `profiles` row
+  automatically. (Same result via the CLI/Admin API if you'd rather script
+  it: `supabase.auth.admin.createUser({ email, password, user_metadata: { role: "staff" } })`
+  from a trusted environment — never from the frontend, since that call
+  needs the service-role key.)
+- **Clients self sign-up** from the "Client? Create an account" link on the
+  login screen (email + password + name). `handle_new_user` defaults any
+  sign-up without role metadata to `role: "client"`. A new client account
+  isn't linked to a project yet — that link (`projects.client_user_id`) gets set
+  by staff. There's no in-app "link client to project" action yet since
+  project data doesn't live in Supabase until the next phase of work (see
+  the `NorthstoneSystem.jsx` note above); for now, set it directly via SQL:
+  `update projects set client_user_id = (select id from profiles where email = '...') where id = '...';`
+- **Forgot/reset password** works for both roles via Supabase's standard
+  email-link flow (`resetPasswordForEmail` → link to `/reset-password` →
+  `updateUser({ password })`).
+- Once signed in, the sidebar shows who's signed in and a **Sign out**
+  link (in the team app's sidebar for staff, in the portal sidebar for
+  clients). Clients never see the "Team View" toggle — `NorthstoneSystem`
+  reads `role` from `useAuth()` and hides it, forcing them into their own
+  portal.
+- Email delivery (confirmation, password reset, invites) uses Supabase's
+  built-in email service by default, which is rate-limited and fine for
+  testing but not production — swap in a custom SMTP provider under
+  **Dashboard → Authentication → Emails** before going live.
 
 ## Getting started
 

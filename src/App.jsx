@@ -1,8 +1,13 @@
 import "./lib/storagePolyfill";
-import NorthstoneSystem from "./NorthstoneSystem";
+import { AuthProvider } from "./lib/AuthProvider";
+import AuthGate from "./AuthGate";
 
 function App() {
-  return <NorthstoneSystem />;
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
+  );
 }
 
 export default App;

@@ -6,8 +6,9 @@ import {
   ChevronDown, ChevronUp, ChevronRight, Bell, StickyNote, ArrowRight, ArrowLeft, TrendingUp, Check, X,
   MapPin, Camera, Ruler, Droplets, Sparkles, PackageSearch, ClipboardCheck, Plus, Trash2,
   Wand2, Send, FileDown, Eye, EyeOff, ShieldCheck, CheckCircle2, Circle, Download, Phone, Mail,
-  Image as ImageIcon, CreditCard, Clock, Star, Share2, Copy, Pencil, Search, Wallet, Boxes, Layers
+  Image as ImageIcon, CreditCard, Clock, Star, Share2, Copy, Pencil, Search, Wallet, Boxes, Layers, LogOut
 } from "lucide-react";
+import { useAuth } from "./lib/AuthProvider";
 
 // ============================================================
 // BRAND TOKENS
@@ -506,6 +507,7 @@ const TEAM_NAV = [
 ];
 
 function Shell({ title, subtitle, children, right, screen, setScreen, onNewProject }) {
+  const { profile, signOut } = useAuth();
   return (
     <div className="shell-outer" style={{ display: "flex", minHeight: "100vh", background: PARCHMENT, fontFamily: "'Inter', system-ui, sans-serif", color: INK }}>
       <style>{`
@@ -544,6 +546,14 @@ function Shell({ title, subtitle, children, right, screen, setScreen, onNewProje
             <n.icon size={15} /> {n.label}
           </div>
         ))}
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+          <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {profile?.full_name || profile?.email}
+          </div>
+          <div className="nav-item" onClick={signOut} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 7, fontSize: 13, cursor: "pointer", color: "rgba(255,255,255,0.82)" }}>
+            <LogOut size={15} /> Sign out
+          </div>
+        </div>
       </div>
       <div className="shell-content" style={{ flex: 1, minWidth: 0, padding: "26px 34px" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
@@ -1032,7 +1042,8 @@ function DocPreviewModal({ doc, onClose }) {
 // MAIN APP
 // ============================================================
 export default function NorthstoneSystem() {
-  const [mode, setMode] = useState("team"); // team | portal
+  const { profile, role, signOut } = useAuth();
+  const [mode, setMode] = useState(role === "client" ? "portal" : "team"); // team | portal
   const [screen, setScreen] = useState("dashboard"); // dashboard | newProject | survey | estimate | proposal
   const [projects, setProjects] = useState([]);
   const [draft, setDraft] = useState(emptyDraft());
@@ -1101,7 +1112,7 @@ export default function NorthstoneSystem() {
           if (d.draft) setDraft(d.draft);
           if (d.settings) setSettings(d.settings);
           if (d.screen) setScreen(d.screen);
-          if (d.mode) setMode(d.mode);
+          if (d.mode && !(role === "client" && d.mode === "team")) setMode(d.mode);
           if (d.portalProjectId) setPortalProjectId(d.portalProjectId);
           if (d.leads) setLeads(d.leads);
           if (d.events) setEvents(d.events);
@@ -1559,7 +1570,10 @@ export default function NorthstoneSystem() {
   // ============================================================
   // TOP MODE SWITCHER (shown everywhere)
   // ============================================================
-  const ModeSwitch = (
+  // Clients never get a "Team View" toggle — they only ever see their own
+  // portal. (Real data isolation comes from RLS once projects live in
+  // Supabase; this is the UI-level counterpart.)
+  const ModeSwitch = role === "client" ? null : (
     <div style={{ display: "flex", background: "#fff", border: "1px solid #ddd8ca", borderRadius: 30, padding: 3 }}>
       <button onClick={() => setMode("team")} style={{ padding: "7px 16px", borderRadius: 24, border: "none", background: mode === "team" ? FOREST : "transparent", color: mode === "team" ? "#fff" : INK, fontSize: 12.5, fontWeight: 700 }}>Team View</button>
       <button onClick={() => { if (!portalProjectId && projects.length) setPortalProjectId(projects[0].id); setMode("portal"); }} style={{ padding: "7px 16px", borderRadius: 24, border: "none", background: mode === "portal" ? FOREST : "transparent", color: mode === "portal" ? "#fff" : INK, fontSize: 12.5, fontWeight: 700 }}>Client Portal</button>
@@ -1622,6 +1636,14 @@ export default function NorthstoneSystem() {
               {n.key === "variations" && pendingVariations.length > 0 && <span style={{ marginLeft: "auto", background: "#c0392b", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 10, padding: "1px 6px" }}>{pendingVariations.length}</span>}
             </div>
           ))}
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
+            <div style={{ fontSize: 11, color: "rgba(255,255,255,0.5)", marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {profile?.full_name || profile?.email}
+            </div>
+            <div className="nav-item" onClick={signOut} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 7, fontSize: 13, cursor: "pointer", color: "rgba(255,255,255,0.82)" }}>
+              <LogOut size={15} /> Sign out
+            </div>
+          </div>
         </div>
 
         <div style={{ flex: 1, padding: "26px 34px", maxWidth: 1100 }}>
