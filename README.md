@@ -22,6 +22,9 @@ src/
     storagePolyfill.js     Temporary localStorage-backed shim for window.storage
 public/
   _redirects              SPA fallback routing for Cloudflare Pages
+supabase/
+  config.toml              Supabase CLI project config
+  migrations/               SQL schema, RLS policies, and client-portal RPC functions
 ```
 
 `NorthstoneSystem.jsx` currently holds the whole app (all screens, all state)
@@ -33,6 +36,67 @@ not the real data layer — the next phase of work is migrating each feature
 (projects, leads, quotes, team, etc.) off `window.storage`/local state and
 onto Supabase tables with proper auth, and splitting this file into smaller
 components as that happens.
+
+## Database schema (Supabase)
+
+`supabase/migrations/` has the full schema, split into two files:
+
+- `20260803122340_initial_schema.sql` — tables (projects, leads, calendar
+  events, team members, and the project's child records: messages, site
+  updates, variations, support tickets, referrals, design visuals), indexes,
+  and the `handle_new_user` trigger that creates a `profiles` row for every
+  new Supabase Auth signup.
+- `20260803122341_rls_and_functions.sql` — Row Level Security policies plus
+  a set of `security definer` RPC functions for client-portal actions
+  (`sign_project_proposal`, `submit_referral`, `respond_to_variation`,
+  `submit_client_message`, `submit_support_ticket`, `submit_review`,
+  `dismiss_portal_welcome`).
+
+**Access model:** two profile roles, `staff` and `client`. Staff (the
+internal team using the main app) get full read/write access to everything.
+Clients only ever see their own project — enforced by
+`projects.client_user_id = auth.uid()` — and never get direct table
+write access; every portal action goes through one of the RPC functions
+above, which validates project ownership before making a narrow, specific
+change. This was chosen over blanket client UPDATE grants so a client can't
+edit arbitrary columns (e.g. their project's price or status) even if the
+frontend is bypassed. All of this was tested against a local Postgres
+instance (seeded `auth.users`/`auth.uid()` stand-ins) before being committed
+— staff/client isolation, every RPC function, and the referral-reward chain
+(client refers a friend → lead created → friend signs → referrer's referral
+marked "Rewarded") all behave as designed.
+
+**Design decisions worth knowing:**
+- Structured, frequently-filtered data (status, dates, foreign keys) is real
+  columns/tables. Free-form nested content the prototype already treats as a
+  document — survey answers, proposal copy, pricing selections, timeline
+  percentages — stays `jsonb`, matching the shape `NorthstoneSystem.jsx`
+  already reads/writes, so wiring up Supabase later is closer to a
+  find-and-replace of `window.storage` calls than a data-model rewrite.
+- **Photos are not stored as base64.** The prototype currently inlines data
+  URLs (`resizeImageFile`); every photo column here (`storage_path` on
+  `project_visuals`, `project_site_updates`, `portfolio_photos`, plus the
+  values in `survey.photos`) expects a Supabase Storage path instead.
+  Buckets to create before wiring up uploads: `project-photos` (survey
+  photos, site updates, design visuals — private, access via the same
+  staff/client rules as the owning project) and `portfolio-photos` (public
+  read, staff write).
+- The pricing catalogue (`PRICING_CATEGORIES` — labour/plant/materials
+  rates & costs) stays in frontend code for now; `projects.pricing` only
+  stores each project's *selections* against it. Moving the catalogue itself
+  into the database (so office staff can update rates without a deploy) is a
+  reasonable phase-2 change, not done here.
+- Supabase's current default no longer auto-exposes new `public` schema
+  tables to the API roles — the migration grants `authenticated` explicit
+  table privileges and relies on RLS for the actual row-level restriction;
+  `anon` gets nothing, so signed-out requests see no data anywhere.
+
+To apply these migrations to a real Supabase project:
+
+```bash
+npx supabase link --project-ref <your-project-ref>
+npx supabase db push
+```
 
 ## Getting started
 
