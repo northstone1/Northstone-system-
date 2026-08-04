@@ -6,7 +6,7 @@ import {
   ChevronDown, ChevronUp, ChevronRight, Bell, StickyNote, ArrowRight, ArrowLeft, TrendingUp, Check, X,
   MapPin, Camera, Ruler, Droplets, Sparkles, PackageSearch, ClipboardCheck, Plus, Trash2,
   Wand2, Send, FileDown, Eye, EyeOff, ShieldCheck, CheckCircle2, Circle, Download, Phone, Mail,
-  Image as ImageIcon, CreditCard, Clock, Star, Share2, Copy, Pencil, Search, Wallet, Boxes, Layers, LogOut
+  Image as ImageIcon, CreditCard, Clock, Star, Share2, Copy, Pencil, Search, Wallet, Boxes, Layers, LogOut, UserPlus
 } from "lucide-react";
 import { useAuth } from "./lib/AuthProvider";
 import * as Projects from "./lib/data/projects";
@@ -901,7 +901,7 @@ function buildProposalEmailText(proj, totals) {
   if (poa.length) t += `\nQuoted separately: ${poa.join(", ")}\n`;
   t += `\nINVESTMENT SUMMARY\nSubtotal (ex VAT): ${gbp(totals.sell)}\nVAT: ${gbp(totals.vat)}\nTOTAL: ${gbp(totals.total)}\n\n`;
   t += `Estimated Duration: ${p.durationWeeks || "4–6 weeks"}\nWarranty: ${p.warrantyYears || 5} year guarantee\nValid for: ${p.validityDays || 30} days\n\n`;
-  t += `To accept this proposal, simply reply to this email or give us a call and we'll get you booked in.\n\n`;
+  t += `You'll also receive a separate invite to your own Northstone project portal, where you can review and accept this proposal, track progress once work begins, and message us directly. If you have any questions before then, just reply to this email or give us a call.\n\n`;
   t += `Kind regards,\nNorthstone Design & Build\n07503 677201\ninfo@northstonedesignandbuild.com\nwww.northstonedesignandbuild.com`;
   return t;
 }
@@ -1070,6 +1070,7 @@ export default function NorthstoneSystem() {
   const [pendingImport, setPendingImport] = useState(null);
   const [editDetailsFor, setEditDetailsFor] = useState(null);
   const [teamMsgDraft, setTeamMsgDraft] = useState("");
+  const [invitingClient, setInvitingClient] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
   const [leadSearch, setLeadSearch] = useState("");
   const [financeTab, setFinanceTab] = useState("dashboard");
@@ -1275,6 +1276,25 @@ export default function NorthstoneSystem() {
     setEditDetailsFor(null);
     flash("Project details updated");
     Projects.saveProjectCore(updated).catch(() => flash("Couldn't save those details — check your connection"));
+  };
+  // Real welcome email: creates (or reuses) the client's account and
+  // emails them a link to set a password and access this project's
+  // portal. Unlike the "Email Proposal" mailto link, this actually sends
+  // — via the invite-client Edge Function, since creating/inviting an
+  // auth user needs the service-role key.
+  const inviteClientToPortal = async (proj) => {
+    if (!proj.email) { flash("Add the client's email in project details first"); return; }
+    setInvitingClient(true);
+    try {
+      const result = await Projects.inviteClient(proj.id, proj.email, proj.client);
+      const updated = { ...proj, clientUserId: result.userId || proj.clientUserId };
+      setProjects(ps => ps.map(p => p.id === proj.id ? updated : p));
+      if (draft.id === proj.id) setDraft(updated);
+      flash(result.invited ? `Invite sent to ${proj.email}` : `${proj.email} already has an account — linked to this project`);
+    } catch (e) {
+      flash(e.message || "Couldn't invite the client — check your connection");
+    }
+    setInvitingClient(false);
   };
   const markProjectLost = (proj, reason, notes) => {
     const updated = { ...proj, previousStatus: proj.status, status: "Lost", lostReason: reason, lostNotes: notes, lostAt: new Date().toISOString().slice(0, 10) };
@@ -3638,10 +3658,18 @@ export default function NorthstoneSystem() {
           <a
             href={draft.email ? `mailto:${encodeURIComponent(draft.email)}?subject=${encodeURIComponent(`Your Proposal from Northstone Design & Build — ${draft.name || "Your Project"}`)}&body=${encodeURIComponent(buildProposalEmailText(draft, { sell: sellTotal, vat, total: clientTotal }))}` : undefined}
             onClick={(e) => { if (!draft.email) { e.preventDefault(); flash("Add the client's email in the project details first"); } }}
-            style={{ padding: "9px 16px", background: FOREST, color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, textDecoration: "none" }}
+            style={{ padding: "9px 16px", background: "#fff", color: FOREST, border: `1px solid ${FOREST}`, borderRadius: 8, fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 6, textDecoration: "none" }}
           >
-            <Mail size={14}/> Email Proposal to Client
+            <Mail size={14}/> Email Quote Summary (opens your Mail app)
           </a>
+          <button
+            className="top-btn"
+            disabled={invitingClient}
+            onClick={() => inviteClientToPortal(draft)}
+            style={{ padding: "9px 16px", background: invitingClient ? "#ccc" : FOREST, color: "#fff", border: "none", borderRadius: 8, fontSize: 12.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}
+          >
+            <UserPlus size={14}/> {invitingClient ? "Sending…" : draft.clientUserId ? "Resend Portal Invite" : "Invite Client to Portal"}
+          </button>
         </div>
       </div>
       {sellTotal > 0 && profitTotal / sellTotal * 100 < settings.targetMarginPct && (

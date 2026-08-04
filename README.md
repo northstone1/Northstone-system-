@@ -109,16 +109,20 @@ Two ways in, matching the `staff`/`client` roles from the schema above:
   it: `supabase.auth.admin.createUser({ email, password, user_metadata: { role: "staff" } })`
   from a trusted environment — never from the frontend, since that call
   needs the service-role key.)
-- **Clients self sign-up** from the "Client? Create an account" link on the
-  login screen (email + password + name). `handle_new_user` defaults any
-  sign-up without role metadata to `role: "client"`. A new client account
-  isn't linked to a project yet — that link (`projects.client_user_id`) gets
-  set by staff. There's no in-app "link client to project" screen yet
-  (a reasonable next addition); for now, set it directly via SQL:
-  `update projects set client_user_id = (select id from profiles where email = '...') where id = '...';`
+- **Clients get invited by staff**, from the Proposal screen's "Invite
+  Client to Portal" button. This calls the `invite-client` Edge Function
+  (see below), which creates their account, emails them a link to set a
+  password, and links the account to the project (`projects.client_user_id`)
+  — all in one step. If that email address already has an account (they
+  self-signed-up already, or were invited to an earlier project), it skips
+  re-inviting and just links the existing account instead. Clients can
+  still self sign-up from the "Client? Create an account" link on the login
+  screen if you'd rather send them there directly and link manually via
+  SQL: `update projects set client_user_id = (select id from profiles where email = '...') where id = '...';`
 - **Forgot/reset password** works for both roles via Supabase's standard
   email-link flow (`resetPasswordForEmail` → link to `/reset-password` →
-  `updateUser({ password })`).
+  `updateUser({ password })`). The invite email uses the same underlying
+  "set your password" mechanism.
 - Once signed in, the sidebar shows who's signed in and a **Sign out**
   link (in the team app's sidebar for staff, in the portal sidebar for
   clients). Clients never see the "Team View" toggle — `NorthstoneSystem`
@@ -128,6 +132,25 @@ Two ways in, matching the `staff`/`client` roles from the schema above:
   built-in email service by default, which is rate-limited and fine for
   testing but not production — swap in a custom SMTP provider under
   **Dashboard → Authentication → Emails** before going live.
+
+### Deploying the invite-client Edge Function
+
+`supabase/functions/invite-client/` creates/invites a client's account and
+links it to a project. It needs the service-role key, which is why it's a
+server-side function rather than a direct browser call — deploy it once:
+
+```bash
+npx supabase functions deploy invite-client
+npx supabase secrets set APP_URL=https://your-deployed-app-url
+```
+
+`APP_URL` is where the invite email's link sends the client back to (your
+Cloudflare Pages URL or custom domain) — without it the link falls back to
+whatever default Supabase has configured, which likely isn't this app.
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are
+injected automatically by the Edge Functions runtime; nothing to set for
+those. The function itself checks the caller's `profiles.role` and rejects
+anything but `staff` before doing anything privileged.
 
 ## Data layer
 

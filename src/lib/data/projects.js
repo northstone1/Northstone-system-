@@ -376,3 +376,26 @@ export async function dismissPortalWelcomeAsClient(projectId) {
   const { error } = await supabase.rpc("dismiss_portal_welcome", { p_project_id: projectId });
   must(error);
 }
+
+// ============================================================
+// Client invite — staff-only, calls the invite-client Edge Function since
+// creating/inviting an auth user needs the service-role key. See
+// supabase/functions/invite-client.
+// ============================================================
+export async function inviteClient(projectId, email, fullName) {
+  const { data, error } = await supabase.functions.invoke("invite-client", {
+    body: { projectId, email, fullName },
+  });
+  if (error) {
+    // Edge Function errors land here with the response body on error.context
+    let message = error.message;
+    try {
+      const body = await error.context?.json();
+      if (body?.error) message = body.error;
+    } catch {
+      // response body wasn't JSON — fall back to error.message
+    }
+    throw new Error(message);
+  }
+  return data;
+}
