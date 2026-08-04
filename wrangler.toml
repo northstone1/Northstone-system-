@@ -1,5 +1,5 @@
 name = "northstone-system"
-compatibility_date = "2026-08-01"
+compatibility_date = "2026-08-04"
 
 [assets]
 directory = "./dist"
