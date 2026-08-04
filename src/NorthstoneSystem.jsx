@@ -515,7 +515,7 @@ const TEAM_NAV = [
   { key: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
-function Shell({ title, subtitle, children, right, screen, setScreen, onNewProject }) {
+function Shell({ title, subtitle, children, right, screen, setScreen, onNewProject, onNavClick }) {
   const { profile, signOut } = useAuth();
   return (
     <div className="shell-outer" style={{ display: "flex", minHeight: "100vh", background: PARCHMENT, fontFamily: "'Inter', system-ui, sans-serif", color: INK }}>
@@ -551,7 +551,7 @@ function Shell({ title, subtitle, children, right, screen, setScreen, onNewProje
           </button>
         )}
         {TEAM_NAV.map(n => (
-          <div key={n.key} className="nav-item" onClick={() => setScreen && setScreen(n.key)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 7, fontSize: 13, marginBottom: 4, cursor: "pointer", background: screen === n.key ? "rgba(200,149,47,0.18)" : "transparent", color: screen === n.key ? GOLD : "rgba(255,255,255,0.82)", fontWeight: screen === n.key ? 700 : 400 }}>
+          <div key={n.key} className="nav-item" onClick={() => { setScreen && setScreen(n.key); onNavClick && onNavClick(); }} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 7, fontSize: 13, marginBottom: 4, cursor: "pointer", background: screen === n.key ? "rgba(200,149,47,0.18)" : "transparent", color: screen === n.key ? GOLD : "rgba(255,255,255,0.82)", fontWeight: screen === n.key ? 700 : 400 }}>
             <n.icon size={15} /> {n.label}
           </div>
         ))}
@@ -1246,11 +1246,16 @@ export default function NorthstoneSystem() {
   // ============================================================
   // DASHBOARD ACTIONS
   // ============================================================
+  // Staff-only — this is also reachable from the shared "no project yet"
+  // placeholder a client with no linked project sees, so it must no-op for
+  // them rather than dropping them into the team-side wizard.
   const startNewProject = () => {
+    if (role !== "staff") return;
     const fresh = emptyDraft();
     setDraft(fresh);
     setStep(0);
     setScreen("newProject");
+    setMode("team");
   };
   const openProject = (proj) => {
     setDraft(proj);
@@ -1786,7 +1791,7 @@ export default function NorthstoneSystem() {
   if (mode === "portal") {
     if (!portalProject || !portalProject.name) {
       return (
-        <Shell title="Client Portal" subtitle="No project yet" right={ModeSwitch} screen={screen} setScreen={setScreen} onNewProject={startNewProject}>
+        <Shell title="Client Portal" subtitle="No project yet" right={ModeSwitch} screen={screen} setScreen={setScreen} onNewProject={startNewProject} onNavClick={role === "staff" ? () => setMode("team") : undefined}>
           <div style={{ background: "#fff", borderRadius: 12, padding: 30, border: "1px solid #eae6db", textAlign: "center" }}>
             Create a project in Team View first, and it'll appear here for your client.
           </div>
