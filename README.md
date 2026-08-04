@@ -213,4 +213,25 @@ npm run preview    # preview the production build locally
 - **Build output directory**: `dist`
 - **Environment variables** (Settings → Environment variables, set for both Production and Preview): `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` — same values as `.env.local`, not committed to the repo.
 
-**One gotcha:** Supabase Auth checks outgoing links (password reset, email confirmation) against an allowlist under **your Supabase project's Dashboard → Authentication → URL Configuration**. Add your Cloudflare Pages URL there (the `*.pages.dev` one Cloudflare assigns, plus any custom domain you add later) as both the **Site URL** and in **Redirect URLs** — otherwise those emailed links will point at the wrong place or get rejected. `public/_redirects` already handles client-side routing (all paths serve `index.html`), so no extra Cloudflare config is needed for that part.
+Cloudflare's current dashboard provisions new "Workers & Pages" projects on their
+unified Workers deployment model, whose deploy step runs `npx wrangler deploy`
+rather than the older Pages-only asset upload. That needs `wrangler.toml` (already
+in this repo) to know what to deploy:
+
+```toml
+name = "northstone-system"
+compatibility_date = "2026-08-01"
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+```
+
+`not_found_handling = "single-page-application"` is what makes client-side routes
+work (equivalent to `public/_redirects`, which still exists for other Cloudflare
+Pages configurations that don't go through wrangler). If you don't see this file
+and a deploy fails at the **Deploying** step (build succeeds, deploy doesn't),
+that's almost certainly why — a missing `wrangler.toml` leaves `wrangler deploy`
+with nothing to go on.
+
+**One gotcha:** Supabase Auth checks outgoing links (password reset, email confirmation) against an allowlist under **your Supabase project's Dashboard → Authentication → URL Configuration**. Add your Cloudflare Pages URL there (the `*.pages.dev` one Cloudflare assigns, plus any custom domain you add later) as both the **Site URL** and in **Redirect URLs** — otherwise those emailed links will point at the wrong place or get rejected.
