@@ -27,7 +27,13 @@ const FOREST_DEEP = "#0a1f18";
 const GOLD = "#c8952f";
 const PARCHMENT = "#f6f3ec";
 const INK = "#20241f";
-const uid = () => Math.random().toString(36).slice(2, 10);
+// A real UUID, not a short random string — emptyDraft() uses this for a new
+// project's id, and that id gets sent straight to Postgres as the
+// projects.id primary key (uuid column) the first time the project saves.
+// A non-UUID string there fails outright ("invalid input syntax for type
+// uuid"), so every id generated locally has to be genuinely UUID-shaped,
+// not just any string that happens to look unique.
+const uid = () => crypto.randomUUID();
 const gbp = (n) => `£${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const generateReferralCode = (proj) => {
   const namePart = (proj.client || "CLIENT").split(" ")[0].toUpperCase().replace(/[^A-Z]/g, "").slice(0, 6) || "CLIENT";
