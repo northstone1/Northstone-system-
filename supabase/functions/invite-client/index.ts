@@ -123,9 +123,15 @@ Deno.serve(async (req) => {
       return json({ linked: true, invited: false });
     }
 
+    // redirectTo only matters if the "Invite user" email template still
+    // uses the default {{ .ConfirmationURL }} (server-side verify, then
+    // redirect with a session already established). If the template's
+    // been switched to link straight to /auth/confirm with token_hash +
+    // type — see README — this is unused; the email link bypasses
+    // redirectTo entirely.
     const { data: invited, error: inviteError } = await adminClient.auth.admin.inviteUserByEmail(email, {
       data: { role: "client", full_name: fullName || null },
-      redirectTo: appUrl,
+      redirectTo: appUrl ? `${appUrl}/auth/confirm` : undefined,
     });
     if (inviteError) {
       return json({ error: inviteError.message }, 400);

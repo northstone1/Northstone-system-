@@ -152,6 +152,37 @@ injected automatically by the Edge Functions runtime; nothing to set for
 those. The function itself checks the caller's `profiles.role` and rejects
 anything but `staff` before doing anything privileged.
 
+### The /auth/confirm route — and the email template it depends on
+
+`src/screens/auth/ConfirmInviteScreen.jsx` is a deliberate-tap confirmation
+page: it reads `token_hash` and `type` from the URL's query string, shows a
+"Set up my account" button (no auto-submit), calls
+`supabase.auth.verifyOtp({ token_hash, type })` on tap, then shows a
+password + confirm-password form, calls `supabase.auth.updateUser({
+password })` on submit, and redirects to `/` on success — landing signed in,
+since `verifyOtp` already established a session. `App.jsx` checks
+`window.location.pathname === "/auth/confirm"` for this; no router library
+needed for one route.
+
+**This only works if Supabase's invite email actually links here with those
+params.** By default it doesn't — the stock "Invite user" template uses
+`{{ .ConfirmationURL }}`, which verifies the token server-side on Supabase's
+own domain and redirects with a session already established (the
+`detectSessionInUrl` flow `AuthProvider` otherwise relies on, e.g. for
+password reset). That's a different, more automatic flow than what this
+route expects. To point invites at `/auth/confirm` instead:
+
+**Dashboard → Authentication → Email Templates → Invite user**, replace the
+confirmation link with:
+
+```
+{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type={{ .Type }}
+```
+
+`{{ .SiteURL }}` resolves from **Authentication → URL Configuration → Site
+URL** — make sure that's set to your deployed app's URL (not `localhost`),
+separately from the Edge Function's `APP_URL` secret above.
+
 ## Data layer
 
 Everything in `src/lib/data/` follows the same shape: fetch functions map
