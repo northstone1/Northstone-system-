@@ -41,7 +41,7 @@ const gbp = (n) => `£${(n || 0).toLocaleString(undefined, { minimumFractionDigi
 // default rather than propagating NaN into a client-facing document.
 const projectDurationWeeks = (p) => {
   const n = Number(p?.durationWeeks);
-  return n > 0 ? n : 5;
+  return n > 0 ? n : 2;
 };
 // Formats a fractional week count as whichever unit reads naturally —
 // days for anything under a week, half-weeks otherwise — used to turn a
@@ -370,7 +370,7 @@ function emptyDraft() {
     proposal: {
       welcomeMessage: "Thank you for the opportunity to propose our design and build solution for your outdoor space. We are excited to bring your vision to life with exceptional craftsmanship and attention to detail.",
       highlights: ["Bespoke design tailored to your lifestyle", "Premium materials and expert craftsmanship", "Functional, beautiful outdoor living spaces", "Built to last with our 5-year guarantee"],
-      validityDays: 30, warrantyYears: 5, durationWeeks: 5,
+      validityDays: 30, warrantyYears: 5, durationWeeks: 2,
     },
     signature: { clientName: "", date: "", agreed: false, signed: false, typedSignature: "" },
     status: "Draft",
