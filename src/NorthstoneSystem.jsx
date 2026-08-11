@@ -35,6 +35,25 @@ const INK = "#20241f";
 // not just any string that happens to look unique.
 const uid = () => crypto.randomUUID();
 const gbp = (n) => `£${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// proposal.durationWeeks used to be a free-text string ("4 – 6 Weeks");
+// projects saved before that changed to a plain number still have the old
+// string sitting in their data, so every read site falls back to a sane
+// default rather than propagating NaN into a client-facing document.
+const projectDurationWeeks = (p) => {
+  const n = Number(p?.durationWeeks);
+  return n > 0 ? n : 5;
+};
+// Formats a fractional week count as whichever unit reads naturally —
+// days for anything under a week, half-weeks otherwise — used to turn a
+// stage's proportional share of the total duration into display text.
+const formatStageDuration = (weeks) => {
+  if (weeks < 1) {
+    const days = Math.max(1, Math.round(weeks * 7));
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  const rounded = Math.round(weeks * 2) / 2;
+  return `${rounded % 1 === 0 ? rounded : rounded.toFixed(1)} week${rounded === 1 ? "" : "s"}`;
+};
 const generateReferralCode = (proj) => {
   const namePart = (proj.client || "CLIENT").split(" ")[0].toUpperCase().replace(/[^A-Z]/g, "").slice(0, 6) || "CLIENT";
   const num = Math.floor(1000 + Math.random() * 9000);
@@ -351,7 +370,7 @@ function emptyDraft() {
     proposal: {
       welcomeMessage: "Thank you for the opportunity to propose our design and build solution for your outdoor space. We are excited to bring your vision to life with exceptional craftsmanship and attention to detail.",
       highlights: ["Bespoke design tailored to your lifestyle", "Premium materials and expert craftsmanship", "Functional, beautiful outdoor living spaces", "Built to last with our 5-year guarantee"],
-      validityDays: 30, warrantyYears: 5, durationWeeks: "4 – 6 Weeks",
+      validityDays: 30, warrantyYears: 5, durationWeeks: 5,
     },
     signature: { clientName: "", date: "", agreed: false, signed: false, typedSignature: "" },
     status: "Draft",
@@ -821,20 +840,27 @@ function generateProposalDoc(proj, totals, portfolioPhotos) {
       </div>
     </div>`;
 
-  const buildProgrammeStages = (byCatObj) => {
+  // Which stages apply is still driven by what's actually in scope; what
+  // changed is that each stage now gets a relative *weight* rather than a
+  // fixed duration, and those weights get split proportionally across the
+  // client-facing estimated duration. Fixed durations stacked up to far
+  // more than small jobs actually take — a driveway-only job would still
+  // show 6+ weeks of stages regardless of how long the job really was.
+  const buildProgrammeStages = (byCatObj, totalWeeks) => {
     const cats = Object.keys(byCatObj);
     const has = (names) => names.some(n => cats.includes(n));
-    const stages = [{ label: "Design & Planning", desc: "Finalising design, technical drawings, material selections and project documentation.", duration: "1 week" }];
-    if (has(["Groundworks", "Materials"])) stages.push({ label: "Site Preparation & Groundworks", desc: "Site clearance, excavation and drainage installation to ensure long-term performance.", duration: "1 week" });
-    if (has(["Surfacing", "Kerbs"])) stages.push({ label: "Hard Landscaping", desc: "Installation of paving, kerbs, steps and structural features.", duration: "2–3 weeks" });
-    if (has(["Outdoor Living", "Electric Gates & Automation"])) stages.push({ label: "Structures & Features", desc: "Erection of pergolas, gates, outdoor kitchens and bespoke features.", duration: "1–2 weeks" });
+    const stages = [{ label: "Design & Planning", desc: "Finalising design, technical drawings, material selections and project documentation.", weight: 1 }];
+    if (has(["Groundworks", "Materials"])) stages.push({ label: "Site Preparation & Groundworks", desc: "Site clearance, excavation and drainage installation to ensure long-term performance.", weight: 1 });
+    if (has(["Surfacing", "Kerbs"])) stages.push({ label: "Hard Landscaping", desc: "Installation of paving, kerbs, steps and structural features.", weight: 2.5 });
+    if (has(["Outdoor Living", "Electric Gates & Automation"])) stages.push({ label: "Structures & Features", desc: "Erection of pergolas, gates, outdoor kitchens and bespoke features.", weight: 1.5 });
     const hasLighting = Object.values(byCatObj).flat().some(it => /light/i.test(it.label));
-    if (hasLighting) stages.push({ label: "Lighting & Electrical", desc: "Installation of all lighting, electrical connections and integrated systems.", duration: "1 week" });
-    if (has(["Landscaping"])) stages.push({ label: "Planting & Softscaping", desc: "Installation of plants, turf, decorative stone and soft landscaping.", duration: "1 week" });
-    stages.push({ label: "Final Finish & Handover", desc: "Final clean, quality inspection and handover of your completed outdoor space.", duration: "3–5 days" });
-    return stages;
+    if (hasLighting) stages.push({ label: "Lighting & Electrical", desc: "Installation of all lighting, electrical connections and integrated systems.", weight: 1 });
+    if (has(["Landscaping"])) stages.push({ label: "Planting & Softscaping", desc: "Installation of plants, turf, decorative stone and soft landscaping.", weight: 1 });
+    stages.push({ label: "Final Finish & Handover", desc: "Final clean, quality inspection and handover of your completed outdoor space.", weight: 0.5 });
+    const totalWeight = stages.reduce((s, st) => s + st.weight, 0);
+    return stages.map(st => ({ ...st, duration: formatStageDuration((st.weight / totalWeight) * totalWeeks) }));
   };
-  const programmeStages = buildProgrammeStages(byCat);
+  const programmeStages = buildProgrammeStages(byCat, projectDurationWeeks(p));
   const programmePage = `
     <div class="prop-page cream">
       <div class="prop-eyebrow">Project Timeline</div>
@@ -906,7 +932,7 @@ function buildProposalEmailText(proj, totals) {
   });
   if (poa.length) t += `\nQuoted separately: ${poa.join(", ")}\n`;
   t += `\nINVESTMENT SUMMARY\nSubtotal (ex VAT): ${gbp(totals.sell)}\nVAT: ${gbp(totals.vat)}\nTOTAL: ${gbp(totals.total)}\n\n`;
-  t += `Estimated Duration: ${p.durationWeeks || "4–6 weeks"}\nWarranty: ${p.warrantyYears || 5} year guarantee\nValid for: ${p.validityDays || 30} days\n\n`;
+  t += `Estimated Duration: ${projectDurationWeeks(p)} weeks\nWarranty: ${p.warrantyYears || 5} year guarantee\nValid for: ${p.validityDays || 30} days\n\n`;
   t += `You'll also receive a separate invite to your own Northstone project portal, where you can review and accept this proposal, track progress once work begins, and message us directly. If you have any questions before then, just reply to this email or give us a call.\n\n`;
   t += `Kind regards,\nNorthstone Design & Build\n07503 677201\ninfo@northstonedesignandbuild.com\nwww.northstonedesignandbuild.com`;
   return t;
@@ -3721,7 +3747,7 @@ export default function NorthstoneSystem() {
             <RowS label={`VAT (${settings.vatPct}%)`} value={gbp(vat)} />
             <div style={{ borderTop: "1px solid #eae6db", margin: "10px 0" }} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14 }}><div style={{ fontSize: 12.5, color: "#8a887f", fontWeight: 700 }}>TOTAL INVESTMENT</div><div style={{ fontFamily: "'Playfair Display', serif", fontSize: 22, fontWeight: 700, color: FOREST }}>{gbp(clientTotal)}</div></div>
-            <div style={{ fontSize: 12, color: "#8a887f", marginBottom: 8 }}>Estimated Duration: <b style={{ color: INK }}>{draft.proposal.durationWeeks}</b> · Warranty: <b style={{ color: INK }}>{draft.proposal.warrantyYears} Year Guarantee</b></div>
+            <div style={{ fontSize: 12, color: "#8a887f", marginBottom: 8 }}>Estimated Duration: <b style={{ color: INK }}>{projectDurationWeeks(draft.proposal)} weeks</b> · Warranty: <b style={{ color: INK }}>{draft.proposal.warrantyYears} Year Guarantee</b></div>
             <div style={{ fontSize: 12, fontWeight: 700, marginTop: 12, marginBottom: 6 }}>Payment Schedule</div>
             {PAYMENT_STAGES.map(s => <div key={s} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "3px 0" }}><span>{s}</span><span style={{ fontWeight: 600 }}>{gbp(clientTotal / 4)}</span></div>)}
           </div>
@@ -3731,6 +3757,17 @@ export default function NorthstoneSystem() {
           <div style={{ background: "#fff", borderRadius: 12, padding: 18, border: "1px solid #eae6db", marginBottom: 16 }}>
             <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Edit Proposal Content</div>
             <Field label="Welcome Message"><textarea style={{ ...inputStyle, minHeight: 70, width: "100%" }} value={draft.proposal.welcomeMessage} onChange={e => setDraft(d => ({ ...d, proposal: { ...d.proposal, welcomeMessage: e.target.value } }))} /></Field>
+            <Field label="Estimated Project Duration (weeks)">
+              <input
+                type="number"
+                min="1"
+                step="0.5"
+                style={{ ...inputStyle, width: 100 }}
+                value={draft.proposal.durationWeeks}
+                onChange={e => setDraft(d => ({ ...d, proposal: { ...d.proposal, durationWeeks: e.target.value === "" ? "" : Number(e.target.value) } }))}
+              />
+              <div style={{ fontSize: 11, color: "#9a978c", marginTop: 4 }}>Drives the Programme of Works page in the proposal document — each stage's duration is split proportionally from this total.</div>
+            </Field>
             <Field label="Highlights">
               {draft.proposal.highlights.map((h, i) => (
                 <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
