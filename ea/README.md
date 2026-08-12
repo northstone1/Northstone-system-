@@ -1,16 +1,18 @@
-# Gold trading EAs (MT5)
+# Trading EAs (MT5)
 
-Two standalone MetaTrader 5 Expert Advisors for gold (XAUUSD). Both are
+Three standalone MetaTrader 5 Expert Advisors for gold and Bitcoin. All are
 unrelated to the rest of this repository (the Northstone landscaping app) —
 they're kept in their own `ea/` folder.
 
-- **`GoldTrendBreakoutEA.mq5`** — swing/trend-following, fewer and larger
-  trades, meant for H1+ timeframes.
-- **`GoldScalperEA.mq5`** — high-frequency momentum scalping, many small
-  trades, meant for M1/M5 timeframes.
+- **`GoldTrendBreakoutEA.mq5`** — swing/trend-following on XAUUSD, fewer and
+  larger trades, meant for H1+ timeframes.
+- **`GoldScalperEA.mq5`** — high-frequency momentum scalping on XAUUSD, many
+  small trades, meant for M1/M5 timeframes.
+- **`BTCTrendBreakoutEA.mq5`** — the same swing/trend-following logic as the
+  gold version, adapted for BTCUSD, meant for H1+ timeframes.
 
-Pick one (or run both on separate charts with different magic numbers —
-they already use different defaults).
+Run whichever fit your instrument and style (or several at once on separate
+charts — they already use different magic numbers by default).
 
 ---
 
@@ -139,35 +141,80 @@ this EA adds:
 
 ---
 
-## Installation (either EA)
+## BTCTrendBreakoutEA
+
+Same EMA-trend-filter + Donchian-breakout logic as `GoldTrendBreakoutEA`
+(see that section above for the full strategy walkthrough), retuned for
+Bitcoin's differences from gold:
+
+- **No session filter by default** (`InpUseSessionFilter = false`) — BTC
+  trades 24/7 on most crypto CFD feeds, so there's no London/NY-style
+  session structure to restrict to. It's still there (off) if your broker
+  has known thin/maintenance hours you want to avoid.
+- **Spread filter is percentage-based**, not points-based
+  (`InpMaxSpreadPercent`, default 0.15% of price). Raw "points" mean very
+  different things across brokers' BTCUSD quoting conventions (price
+  precision, contract size), so a fixed points threshold from the gold EA
+  wouldn't translate — percentage-of-price does.
+- **Wider default slippage allowance** (`InpSlippagePoints` = 100 vs. 30 for
+  gold) since BTC can move fast between signal and fill.
+- The ATR-based stop-loss/take-profit/trailing logic and the
+  equity-percentage position sizing are otherwise unchanged — both already
+  scale naturally with whatever price level and volatility BTC is showing,
+  no BTC-specific tuning needed there.
+
+### Inputs (only where they differ from GoldTrendBreakoutEA)
+
+| Group | Input | Default | Meaning |
+|---|---|---|---|
+| Execution | `InpMaxSpreadPercent` | 0.15 | Skip entries if spread exceeds this % of price |
+| | `InpSlippagePoints` | 100 | Max allowed slippage (points) |
+| | `InpUseSessionFilter` | false | Off by default — BTC trades 24/7 |
+| Misc | `InpMagicNumber` | 20260814 | Identifies this EA's own trades |
+
+All other inputs (moving averages, breakout, ATR, risk, trailing stop) use
+the same names and defaults as `GoldTrendBreakoutEA` above.
+
+---
+
+## Installation (any EA)
 
 1. Open MetaTrader 5 → **File → Open Data Folder** → `MQL5/Experts/`.
 2. Copy the `.mq5` file into that folder (a subfolder is fine).
 3. In MetaEditor (F4 from MT5), open the file and **Compile** (F7). Fix any
    compiler warnings specific to your MT5 build if they appear.
-4. In MT5, open an XAUUSD chart at the intended timeframe (H1 for the
-   trend EA, M1/M5 for the scalper), drag the EA from the Navigator onto
-   the chart, and enable **Algo Trading**.
+4. In MT5, open the matching chart (XAUUSD or BTCUSD, whatever your broker
+   calls it — check the exact symbol name in the Market Watch) at the
+   intended timeframe (H1 for the trend EAs, M1/M5 for the scalper), drag
+   the EA from the Navigator onto the chart, and enable **Algo Trading**.
 
 ## Before trading live
 
 - **Backtest first.** Use the Strategy Tester (View → Strategy Tester, or
-  Ctrl+R) on XAUUSD with real tick data over several years, across different
-  volatility regimes (2020 crash, 2022 rate-hike trend, chop periods). For
-  the scalper specifically, use **"Every tick based on real ticks"** modeling
+  Ctrl+R) on the target symbol with real tick data over several years,
+  across different volatility regimes (for BTC: 2021 bull run, 2022
+  crash/bear, 2024-25 chop). For the scalper specifically, use **"Every
+  tick based on real ticks"** modeling
   — anything coarser won't represent spread/fill behavior realistically
   enough for a strategy this sensitive to execution cost.
-- **Check your broker's XAUUSD contract specs** — digits, tick size, tick
-  value, and minimum stop distance vary by broker and affect both the lot
-  sizing math and whether ATR-based stops clear the broker's minimum
-  distance. Both EAs read these live via `SymbolInfoDouble`/
+- **Check your broker's contract specs for the symbol** — digits, tick
+  size, tick value, and minimum stop distance vary by broker and affect
+  both the lot sizing math and whether ATR-based stops clear the broker's
+  minimum distance. All three EAs read these live via `SymbolInfoDouble`/
   `SymbolInfoInteger`, but you should still sanity-check the resulting lot
   sizes and stop distances in the tester journal before going live.
-- **Gold spreads widen sharply around news** (NFP, FOMC, CPI). The
-  `InpMaxSpreadPoints` filter helps but isn't a substitute for knowing your
-  broker's typical spread behavior around high-impact events — this matters
-  even more for the scalper, where spread is a bigger fraction of the
-  target.
+- **Spreads widen sharply around volatility events** — scheduled news for
+  gold (NFP, FOMC, CPI), and for BTC often unscheduled (exchange outages,
+  liquidation cascades, regulatory headlines) with no calendar to watch.
+  The spread filters (`InpMaxSpreadPoints` on the gold EAs,
+  `InpMaxSpreadPercent` on the BTC EA) help but aren't a substitute for
+  knowing your broker's typical spread behavior around these events — this
+  matters even more for the scalper, where spread is a bigger fraction of
+  the target.
+- **BTC-specific:** confirm your broker's exact BTCUSD contract size,
+  margin requirements, and any overnight/weekend swap or financing charges
+  on CFD positions before sizing up — these vary a lot more broker-to-broker
+  than gold's do, and can matter more than the strategy's edge if ignored.
 - **Test on a demo account** for a meaningful stretch before committing real
   capital, and only risk capital you can afford to lose. Past backtest
   performance does not guarantee future results. These EAs are provided as
