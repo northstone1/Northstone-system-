@@ -1,6 +1,6 @@
 # Trading EAs (MT5)
 
-Three standalone MetaTrader 5 Expert Advisors for gold and Bitcoin. All are
+Four standalone MetaTrader 5 Expert Advisors for gold and Bitcoin. All are
 unrelated to the rest of this repository (the Northstone landscaping app) —
 they're kept in their own `ea/` folder.
 
@@ -10,6 +10,8 @@ they're kept in their own `ea/` folder.
   small trades, meant for M1/M5 timeframes.
 - **`BTCTrendBreakoutEA.mq5`** — the same swing/trend-following logic as the
   gold version, adapted for BTCUSD, meant for H1+ timeframes.
+- **`BTCScalperEA.mq5`** — the same high-frequency scalping logic as the gold
+  version, adapted for BTCUSD, meant for M1/M5 timeframes.
 
 Run whichever fit your instrument and style (or several at once on separate
 charts — they already use different magic numbers by default).
@@ -174,6 +176,47 @@ Bitcoin's differences from gold:
 
 All other inputs (moving averages, breakout, ATR, risk, trailing stop) use
 the same names and defaults as `GoldTrendBreakoutEA` above.
+
+---
+
+## BTCScalperEA
+
+Same EMA/RSI momentum scalping logic as `GoldScalperEA` (see that section
+above for the full strategy walkthrough), retuned for Bitcoin the same way
+`BTCTrendBreakoutEA` was retuned from the gold trend EA:
+
+- **No session filter by default** (`InpUseSessionFilter = false`) — unlike
+  `GoldScalperEA`, which defaults it **on**. BTC has no session structure to
+  restrict to; enable it if your broker/liquidity provider has specific thin
+  hours worth avoiding.
+- **Spread filter is percentage-based** (`InpMaxSpreadPercent`, default
+  0.10% of price — tighter than the trend EA's 0.15%, since scalp targets
+  are smaller and spread eats a bigger share of them).
+- **Break-even buffer is percentage-based** (`InpBreakEvenBufferPercent`,
+  default 0.02% of price) instead of a fixed points buffer, for the same
+  reason the spread filter is.
+- **Wider default slippage allowance** (`InpSlippagePoints` = 100 vs. 15 for
+  gold).
+- **Volatility floor is percentage-based** (`InpMinATRPercent`, ATR as % of
+  price) instead of a fixed points threshold.
+- Everything else — EMA/RSI signal, ATR stop/target multiples, time-based
+  force exit, daily trade cap, cooldown, equity-percentage sizing — is
+  unchanged from `GoldScalperEA`.
+
+### Inputs (only where they differ from GoldScalperEA)
+
+| Group | Input | Default | Meaning |
+|---|---|---|---|
+| ATR | `InpMinATRPercent` | 0 | Minimum ATR as % of price required to trade; 0 = disabled |
+| Trade mgmt | `InpBreakEvenBufferPercent` | 0.02 | Buffer past entry (% of price) once break-even hits |
+| Execution | `InpMaxSpreadPercent` | 0.10 | Skip entries if spread exceeds this % of price |
+| | `InpSlippagePoints` | 100 | Max allowed slippage (points) |
+| | `InpUseSessionFilter` | false | Off by default — BTC trades 24/7 |
+| Misc | `InpMagicNumber` | 20260815 | Identifies this EA's own trades |
+
+All other inputs (moving averages, RSI, ATR SL/TP multipliers, break-even
+trigger, max bars in trade, risk, daily trade cap, cooldown) use the same
+names and defaults as `GoldScalperEA` above.
 
 ---
 
