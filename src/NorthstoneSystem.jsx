@@ -184,6 +184,7 @@ const PRICING_CATEGORIES = [
   { id: "outdoorliving", name: "Outdoor Living", items: [
     { id: "pergola", label: "Pergola (aluminium, supplied & installed)", type: "range", min: 150, max: 500, cost: 180, unit: "m²", estimated: true },
     { id: "gardenroom", label: "Garden Room / Studio", type: "fixed", rate: 18000, cost: 12000, unit: "item", estimated: true, flagged: "Highly bespoke — edit to match the actual spec quoted." },
+    { id: "shed", label: "Shed / Outdoor Building (supplied & installed)", type: "fixed", rate: 3500, cost: 2200, unit: "item", estimated: true, flagged: "Highly bespoke — edit to match the actual spec quoted." },
     { id: "outdoorkitchen", label: "Outdoor Kitchen", type: "fixed", rate: 8000, cost: 5000, unit: "item", estimated: true, flagged: "Highly bespoke — edit to match the actual spec quoted." },
     { id: "outdoorbar", label: "Outdoor Bar", type: "fixed", rate: 3000, cost: 1800, unit: "item", estimated: true },
     { id: "firepit", label: "Built-in Fire Pit", type: "fixed", rate: 1200, cost: 700, unit: "item", estimated: true },
@@ -272,12 +273,13 @@ function PricingCategoriesUI({ itemState, updateItem, poaState, togglePoa, colla
                           {item.logistic && <div style={{ fontSize: 11, color: "#8a887f", marginTop: 2 }}>{item.logistic}</div>}
                         </div>
                         {item.type === "tier" && (
-                          <div style={{ display: "flex", gap: 4 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                             {["Bronze", "Signature", "Prestige"].map(tier => (
                               <button key={tier} className="tier-btn" onClick={() => updateItem(item.id, { tier, rate: item.tiers[tier], cost: item.costs ? item.costs[tier] : st.cost })} style={{ fontSize: 12, padding: "6px 9px", background: st.tier === tier ? FOREST : PARCHMENT, color: st.tier === tier ? "#fff" : INK, border: `1px solid ${st.tier === tier ? FOREST : "#ddd8ca"}`, borderRadius: 6 }}>
                                 {tier} £{item.tiers[tier]}
                               </button>
                             ))}
+                            <input type="number" inputMode="decimal" value={st.rate} onChange={e => updateItem(item.id, { tier: null, rate: e.target.value })} placeholder="Custom" title="Custom price — overrides the preset tier" style={{ ...inputStyle, width: 65 }} />
                           </div>
                         )}
                         {item.type === "range" && (
@@ -3958,12 +3960,13 @@ function PricingToolScreen({ ModeSwitch, onBack }) {
 
                             {/* rate control */}
                             {item.type === "tier" && (
-                              <div style={{ display: "flex", gap: 4 }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
                                 {["Bronze", "Signature", "Prestige"].map(tier => (
                                   <button key={tier} className="tier-btn" onClick={() => updateItem(item.id, { tier, rate: item.tiers[tier] })} style={{ fontSize: 12, padding: "6px 9px", background: st.tier === tier ? FOREST : PARCHMENT, color: st.tier === tier ? "#fff" : INK, border: `1px solid ${st.tier === tier ? FOREST : "#ddd8ca"}`, borderRadius: 6 }}>
                                     {tier} £{item.tiers[tier]}
                                   </button>
                                 ))}
+                                <input type="number" inputMode="decimal" value={st.rate} onChange={e => updateItem(item.id, { tier: null, rate: e.target.value })} placeholder="Custom" title="Custom price — overrides the preset tier" style={{ ...inputStyle, width: 65 }} />
                               </div>
                             )}
                             {item.type === "range" && (
