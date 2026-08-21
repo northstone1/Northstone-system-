@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useAuth } from "../../lib/AuthProvider";
-import { inputStyle } from "../../lib/brand";
+import { inputStyle, FOREST } from "../../lib/brand";
 import AuthShell, { labelStyle, errorStyle, noticeStyle, primaryButtonStyle, linksRowStyle, linkButtonStyle } from "./AuthShell";
 
 export default function SignUpScreen({ onBack }) {
@@ -8,6 +8,7 @@ export default function SignUpScreen({ onBack }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [consent, setConsent] = useState(false);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(null);
@@ -17,6 +18,10 @@ export default function SignUpScreen({ onBack }) {
     setError("");
     if (password.length < 8) {
       setError("Password must be at least 8 characters");
+      return;
+    }
+    if (!consent) {
+      setError("Please confirm you agree to Northstone storing your details before continuing");
       return;
     }
     setSubmitting(true);
@@ -79,8 +84,23 @@ export default function SignUpScreen({ onBack }) {
             style={{ ...inputStyle, width: "100%", marginTop: 6 }}
           />
         </label>
+        <div style={{ marginTop: 16, padding: "10px 12px", background: "#f6f4ee", borderRadius: 7, fontSize: 11.5, color: "#6b6a63", lineHeight: 1.5 }}>
+          We store your name, email, address, project details and any project photos so we can manage and deliver
+          your project. This information is only used for that purpose and isn't shared with third parties.
+        </div>
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 12, cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+            style={{ marginTop: 2, width: 16, height: 16, accentColor: FOREST, flexShrink: 0 }}
+          />
+          <span style={{ fontSize: 12.5, color: "#333", lineHeight: 1.4 }}>
+            I agree to Northstone Design & Build storing my details to manage my project
+          </span>
+        </label>
         {error && <div style={errorStyle}>{error}</div>}
-        <button type="submit" disabled={submitting} style={primaryButtonStyle(submitting)}>
+        <button type="submit" disabled={submitting || !consent} style={primaryButtonStyle(submitting || !consent)}>
           {submitting ? "Creating account…" : "Create account"}
         </button>
       </form>
