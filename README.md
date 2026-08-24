@@ -141,7 +141,7 @@ server-side function rather than a direct browser call — deploy it once:
 
 ```bash
 npx supabase functions deploy invite-client
-npx supabase secrets set APP_URL=https://your-deployed-app-url
+npx supabase secrets set APP_URL=https://app.northstonedesignandbuild.com
 ```
 
 `APP_URL` is where the invite email's link sends the client back to (your
@@ -273,12 +273,25 @@ repo) is what tells it what to deploy:
 
 ```toml
 name = "northstone-system"
-compatibility_date = "2026-08-01"
+compatibility_date = "2026-08-04"
 
 [assets]
 directory = "./dist"
 not_found_handling = "single-page-application"
+
+routes = [
+  { pattern = "app.northstonedesignandbuild.com", custom_domain = true }
+]
 ```
+
+The `routes` block attaches the app to the custom domain
+`app.northstonedesignandbuild.com` instead of the default
+`*.workers.dev` subdomain. This only works once `northstonedesignandbuild.com`
+has been added as a zone in the same Cloudflare account (**Cloudflare
+Dashboard → Add a domain**, or it's already there if the site is already on
+Cloudflare) — otherwise `wrangler deploy` will fail to attach the route. Once
+it's live, `app.northstonedesignandbuild.com` becomes the app's real URL in
+place of the `workers.dev` one.
 
 In practice, `wrangler deploy`'s auto-config wizard (on by default) detects the
 Vite framework and manages its own generated config each run regardless of this
@@ -294,4 +307,4 @@ end up re-triggering each other, and the deploy fails with
 `Invalid _redirects configuration: ... Infinite loop detected` at the
 **Deploying** step (after the build itself succeeds).
 
-**One gotcha:** Supabase Auth checks outgoing links (password reset, email confirmation) against an allowlist under **your Supabase project's Dashboard → Authentication → URL Configuration**. Add your Cloudflare Pages URL there (the `*.pages.dev` one Cloudflare assigns, plus any custom domain you add later) as both the **Site URL** and in **Redirect URLs** — otherwise those emailed links will point at the wrong place or get rejected.
+**One gotcha:** Supabase Auth checks outgoing links (password reset, email confirmation) against an allowlist under **your Supabase project's Dashboard → Authentication → URL Configuration**. Add `https://app.northstonedesignandbuild.com` there as both the **Site URL** and in **Redirect URLs** (`https://app.northstonedesignandbuild.com/*`) — otherwise those emailed links will point at the wrong place or get rejected. If the app was previously reachable at a `*.workers.dev` URL, remove that from Redirect URLs once the custom domain is confirmed working, and update the `APP_URL` secret on the `invite-client` Edge Function (see above) and the "Invite user" email template's link (see below) to match.
