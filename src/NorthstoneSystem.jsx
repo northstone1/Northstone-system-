@@ -35,6 +35,10 @@ const INK = "#20241f";
 // not just any string that happens to look unique.
 const uid = () => crypto.randomUUID();
 const gbp = (n) => `£${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// Projects that have gone active/won are never eligible for permanent
+// deletion — matches the DB-level restriction in the
+// 20260825150000_owner_delete_restriction migration.
+const isQuoteStage = (status) => !["Signed", "In Construction", "Completed"].includes(status);
 // proposal.durationWeeks used to be a free-text string ("4 – 6 Weeks");
 // projects saved before that changed to a plain number still have the old
 // string sitting in their data, so every read site falls back to a sane
@@ -1085,7 +1089,7 @@ function DocPreviewModal({ doc, onClose }) {
 // MAIN APP
 // ============================================================
 export default function NorthstoneSystem() {
-  const { profile, role, user, signOut } = useAuth();
+  const { profile, role, isOwner, user, signOut } = useAuth();
   const [mode, setMode] = useState(role === "client" ? "portal" : "team"); // team | portal
   const [screen, setScreen] = useState("dashboard"); // dashboard | newProject | survey | estimate | proposal
   const [projects, setProjects] = useState([]);
@@ -1344,6 +1348,14 @@ export default function NorthstoneSystem() {
     if (draft.id === proj.id) setDraft(updated);
     flash(`${proj.name} reactivated`);
     Projects.saveProjectCore(updated).catch(() => flash("Couldn't save that change — check your connection"));
+  };
+  // Owner-only, quote-stage-only — enforced again server-side by RLS (see
+  // the 20260825150000 migration), not just by hiding this in the UI.
+  const deleteProjectPermanently = (proj) => {
+    setProjects(ps => ps.filter(p => p.id !== proj.id));
+    if (draft.id === proj.id) { setScreen("dashboard"); setMode("team"); }
+    flash(`${proj.name} deleted`);
+    Projects.deleteProject(proj.id).catch(() => flash("Couldn't delete that project — check your connection"));
   };
   const sendTeamMessage = (projId, text) => {
     if (!text.trim()) return;
@@ -2463,6 +2475,9 @@ export default function NorthstoneSystem() {
                 {p.status === "Lost" && (
                   <button onClick={(e) => { e.stopPropagation(); reactivateProject(p); }} style={{ padding: "7px 12px", border: `1px solid ${FOREST}`, background: "#fff", color: FOREST, borderRadius: 7, fontSize: 11.5, fontWeight: 700 }}>Reactivate</button>
                 )}
+                {isOwner && isQuoteStage(p.status) && (
+                  <Trash2 size={15} color="#c0392b" style={{ cursor: "pointer", flexShrink: 0 }} onClick={(e) => { e.stopPropagation(); askConfirm(`Are you sure you want to permanently delete "${p.name}"? This cannot be undone.`, () => deleteProjectPermanently(p)); }} />
+                )}
               </div>
             );
           });
@@ -2472,6 +2487,7 @@ export default function NorthstoneSystem() {
         <DocPreviewModal doc={docPreview} onClose={() => setDocPreview(null)} />
         {editDetailsFor && <EditProjectDetailsModal project={editDetailsFor} onSave={saveProjectDetails} onClose={() => setEditDetailsFor(null)} />}
         {markLostFor && <MarkLostModal project={markLostFor} onConfirm={(reason, notes) => markProjectLost(markLostFor, reason, notes)} onClose={() => setMarkLostFor(null)} />}
+        <ConfirmDialog confirm={confirmAction} onCancel={() => setConfirmAction(null)} />
       </Shell>
     );
   }
@@ -2762,7 +2778,9 @@ export default function NorthstoneSystem() {
                     {LEAD_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                   <button onClick={() => convertLead(l)} style={{ padding: "8px 14px", background: FOREST, color: "#fff", border: "none", borderRadius: 7, fontSize: 12, fontWeight: 700 }}>Convert to Project</button>
-                  <Trash2 size={15} color="#c0392b" style={{ cursor: "pointer", marginLeft: "auto" }} onClick={() => askConfirm(`Delete ${l.name}? This can't be undone.`, () => deleteLead(l.id))} />
+                  {isOwner && (
+                    <Trash2 size={15} color="#c0392b" style={{ cursor: "pointer", marginLeft: "auto" }} onClick={() => askConfirm(`Are you sure you want to permanently delete "${l.name}"? This cannot be undone.`, () => deleteLead(l.id))} />
+                  )}
                 </div>
               </div>
             ))}
@@ -3528,6 +3546,9 @@ export default function NorthstoneSystem() {
             <button className="top-btn" onClick={() => openEditDetails(draft)} style={{ padding: "9px 14px", border: "1px solid #ddd8ca", borderRadius: 8, background: "#fff", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}><Pencil size={13}/> Edit Details</button>
             <button className="top-btn" onClick={() => setScreen("survey")} style={{ padding: "9px 14px", border: "1px solid #ddd8ca", borderRadius: 8, background: "#fff", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>Back to Survey</button>
             <button className="top-btn" onClick={() => setShowSettings(s => !s)} style={{ padding: "9px 14px", border: "1px solid #ddd8ca", borderRadius: 8, background: "#fff", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}><SettingsIcon size={14}/> Settings</button>
+            {isOwner && isQuoteStage(draft.status) && (
+              <button className="top-btn" onClick={() => askConfirm(`Are you sure you want to permanently delete "${draft.name}"? This cannot be undone.`, () => deleteProjectPermanently(draft))} style={{ padding: "9px 14px", border: "1px solid #c0392b", borderRadius: 8, background: "#fff", color: "#c0392b", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}><Trash2 size={13}/> Delete Quote</button>
+            )}
           </div>
         </div>
 
@@ -3655,6 +3676,7 @@ export default function NorthstoneSystem() {
         {toast && <Toast msg={toast} />}
         <DocPreviewModal doc={docPreview} onClose={() => setDocPreview(null)} />
         {editDetailsFor && <EditProjectDetailsModal project={editDetailsFor} onSave={saveProjectDetails} onClose={() => setEditDetailsFor(null)} />}
+        <ConfirmDialog confirm={confirmAction} onCancel={() => setConfirmAction(null)} />
       </Shell>
     );
   }
@@ -3704,6 +3726,9 @@ export default function NorthstoneSystem() {
           >
             <UserPlus size={14}/> {invitingClient ? "Sending…" : draft.clientUserId ? "Resend Portal Invite" : "Invite Client to Portal"}
           </button>
+          {isOwner && isQuoteStage(draft.status) && (
+            <button className="top-btn" onClick={() => askConfirm(`Are you sure you want to permanently delete "${draft.name}"? This cannot be undone.`, () => deleteProjectPermanently(draft))} style={{ padding: "9px 14px", border: "1px solid #c0392b", borderRadius: 8, background: "#fff", color: "#c0392b", fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}><Trash2 size={13}/> Delete Quote</button>
+          )}
         </div>
       </div>
       {sellTotal > 0 && profitTotal / sellTotal * 100 < settings.targetMarginPct && (
@@ -3796,6 +3821,7 @@ export default function NorthstoneSystem() {
       {toast && <Toast msg={toast} />}
       <DocPreviewModal doc={docPreview} onClose={() => setDocPreview(null)} />
       {editDetailsFor && <EditProjectDetailsModal project={editDetailsFor} onSave={saveProjectDetails} onClose={() => setEditDetailsFor(null)} />}
+      <ConfirmDialog confirm={confirmAction} onCancel={() => setConfirmAction(null)} />
     </Shell>
   );
 }

@@ -1,5 +1,5 @@
 import { supabase } from "../supabaseClient";
-import { deletePhoto, PROJECT_PHOTOS_BUCKET } from "./storage";
+import { deletePhoto, deleteFolder, PROJECT_PHOTOS_BUCKET } from "./storage";
 
 // ============================================================
 // Mapping: DB rows (snake_case, relational children) <-> the UI project
@@ -186,7 +186,16 @@ export async function saveProjectCore(uiProject, { createdBy } = {}) {
   must(error);
 }
 
+// Permanently deletes a project — child rows (visuals, variations,
+// messages, site updates, support tickets, referrals, team assignments)
+// cascade automatically via their foreign keys. Storage doesn't cascade
+// from the DB, so this cleans up the project's photo folder itself first;
+// RLS additionally restricts this to the owner account and blocks it
+// outright for Signed/In Construction/Completed projects (see the
+// 20260825150000 migration), so this is meant only for quote-stage
+// projects that never went anywhere.
 export async function deleteProject(id) {
+  await deleteFolder(PROJECT_PHOTOS_BUCKET, id).catch(() => {});
   const { error } = await supabase.from("projects").delete().eq("id", id);
   must(error);
 }

@@ -133,6 +133,22 @@ Two ways in, matching the `staff`/`client` roles from the schema above:
   testing but not production — swap in a custom SMTP provider under
   **Dashboard → Authentication → Emails** before going live.
 
+### The owner flag — permanently deleting leads/quotes
+
+`profiles.is_owner` (added by the `20260825150000_owner_delete_restriction`
+migration) marks one staff account as the business owner/admin. It's what
+gates permanently deleting a lead or a quote-stage project (Draft/Survey
+Booked/Proposal Sent/Lost) — a destructive, unrecoverable action that
+ordinary staff logins (including any added later) can't do, on
+Signed/In Construction/Completed projects nobody can do, and it's enforced
+by RLS at the database level, not just by hiding the button in the UI. No
+account has this flag by default, including the first staff account — set
+it once via SQL after running the migration:
+
+```sql
+update public.profiles set is_owner = true where email = 'you@yourdomain.com';
+```
+
 ### Deploying the invite-client Edge Function
 
 `supabase/functions/invite-client/` creates/invites a client's account and

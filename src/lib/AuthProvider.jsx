@@ -93,6 +93,7 @@ export function AuthProvider({ children }) {
     user: session?.user ?? null,
     profile,
     role: profile?.role ?? null,
+    isOwner: profile?.is_owner === true,
     loading,
     isPasswordRecovery,
     signIn,

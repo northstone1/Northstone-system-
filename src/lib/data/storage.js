@@ -39,6 +39,23 @@ export async function deletePhoto(bucket, path) {
   await supabase.storage.from(bucket).remove([path]);
 }
 
+// Recursively removes every object under a folder. Storage's list() only
+// returns one level at a time, so this walks subfolders itself — used to
+// clean up a project's survey/visuals/update photos (all stored under
+// "<projectId>/...") when the project itself is permanently deleted, since
+// nothing in the DB schema cascades into Storage.
+export async function deleteFolder(bucket, folder) {
+  const { data, error } = await supabase.storage.from(bucket).list(folder);
+  if (error || !data?.length) return;
+  const filePaths = [];
+  for (const entry of data) {
+    const path = `${folder}/${entry.name}`;
+    if (entry.id) filePaths.push(path);
+    else await deleteFolder(bucket, path);
+  }
+  if (filePaths.length) await supabase.storage.from(bucket).remove(filePaths);
+}
+
 // project-photos is private — every display needs a signed URL. Cached
 // in-memory (per path) so re-rendering the same photo doesn't refetch.
 const signedUrlCache = new Map();
