@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 220" width="640" height="220" role="img" aria-label="Northstone Design &amp; Build">
+  <title>Northstone Design &amp; Build</title>
+  <defs>
+    <style>
+      .ns-wordmark { font-family: 'Playfair Display', Georgia, 'Times New Roman', serif; font-weight: 700; }
+      .ns-tagline { font-family: 'Inter', Helvetica, Arial, sans-serif; font-weight: 600; }
+    </style>
+  </defs>
+  <g transform="translate(20,20) scale(0.9)">
+    <polygon points="143,25.524 57,25.524 14,100 57,174.476 143,174.476 186,100" fill="none" stroke="#F3EAD6" stroke-width="6" stroke-linejoin="round"/>
+    <path d="M45,152 L85,68 L105,100 L130,82 L158,152 Z" fill="#F3EAD6"/>
+    <path d="M100,35 L102.83,45.17 L113,48 L102.83,50.83 L100,61 L97.17,50.83 L87,48 L97.17,45.17 Z" fill="#C8952F"/>
+  </g>
+  <text class="ns-wordmark" x="230" y="128" font-size="64" fill="#F3EAD6">Northstone</text>
+  <text class="ns-tagline" x="231" y="160" font-size="16" letter-spacing="4" fill="#C8952F">DESIGN &amp; BUILD</text>
+</svg>
