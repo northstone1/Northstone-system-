@@ -168,6 +168,36 @@ injected automatically by the Edge Functions runtime; nothing to set for
 those. The function itself checks the caller's `profiles.role` and rejects
 anything but `staff` before doing anything privileged.
 
+### Deploying the notify-quote-accepted Edge Function
+
+`supabase/functions/notify-quote-accepted/` emails the admin inbox when a
+client accepts & signs their quote from the portal (Proposal tab → "I
+confirm I accept this quote"). The signing itself is recorded by the
+`sign_project_proposal()` RPC directly (typed name, timestamp, status →
+`Signed` — see the migrations); this function only sends the notification
+afterwards, using [Resend](https://resend.com) since the app has no other
+transactional email provider wired up. Deploy it and set its secrets once:
+
+```bash
+npx supabase functions deploy notify-quote-accepted
+npx supabase secrets set RESEND_API_KEY=re_your_key_here
+```
+
+Optional overrides (both default to sensible values if unset — see the
+constants at the top of `index.ts`):
+
+```bash
+npx supabase secrets set QUOTE_ACCEPTED_NOTIFY_EMAIL=you@yourcompany.com
+npx supabase secrets set RESEND_FROM_EMAIL="Northstone <notifications@yourdomain.com>"
+```
+
+Without a verified sending domain in Resend, `RESEND_FROM_EMAIL` falls back
+to Resend's shared sandbox address, which only delivers to your own Resend
+account email — verify a domain in Resend and set `RESEND_FROM_EMAIL` before
+relying on this in production. `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and
+`SUPABASE_SERVICE_ROLE_KEY` are injected automatically, same as
+`invite-client` above.
+
 ### The /auth/confirm route — and the email template it depends on
 
 `src/screens/auth/ConfirmInviteScreen.jsx` is a deliberate-tap confirmation

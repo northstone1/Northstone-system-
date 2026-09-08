@@ -1104,6 +1104,9 @@ export default function NorthstoneSystem() {
   const [newEvent, setNewEvent] = useState({ title: "", type: "Site Visit", date: "", time: "", projectId: "", leadId: "", notes: "" });
   const [newVariation, setNewVariation] = useState({ title: "", description: "", amount: "" });
   const [reviewForm, setReviewForm] = useState({ rating: 5, text: "" });
+  const [acceptName, setAcceptName] = useState("");
+  const [acceptAgreed, setAcceptAgreed] = useState(false);
+  const [accepting, setAccepting] = useState(false);
   const [backupPreview, setBackupPreview] = useState(null);
   const [pendingImport, setPendingImport] = useState(null);
   const [editDetailsFor, setEditDetailsFor] = useState(null);
@@ -1809,6 +1812,29 @@ export default function NorthstoneSystem() {
     if (draft.id === updated.id) setDraft(updated);
     Projects.saveProjectCore(updated).catch(() => flash("Couldn't save that change — check your connection"));
   };
+  // Client-side quote acceptance — the remote counterpart to signProposal()
+  // above. That one is staff-only (typed in person/on a call, written
+  // directly to the table); this one is what a real client hits from their
+  // own login, so it goes through sign_project_proposal() instead, which
+  // enforces ownership and the already-signed guard server-side. Staff
+  // previewing the portal never reach the real RPC (owns_project would
+  // reject them anyway) — the button's disabled state below stops them
+  // before that.
+  const acceptQuote = async (typedName) => {
+    setAccepting(true);
+    try {
+      const result = await Projects.acceptQuoteAsClient(portalProject.id, typedName);
+      const updated = { ...portalProject, signature: result.signature, status: result.status, referralCode: result.referralCode || portalProject.referralCode };
+      setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
+      if (draft.id === updated.id) setDraft(updated);
+      flash("Quote accepted — thank you!");
+      Projects.notifyQuoteAccepted(portalProject.id).catch(() => {});
+    } catch (e) {
+      flash(e.message || "Couldn't submit your acceptance — check your connection and try again");
+    } finally {
+      setAccepting(false);
+    }
+  };
   const dismissPortalWelcome = () => {
     const updated = { ...portalProject, portalWelcomed: true };
     setProjects(ps => ps.map(p => p.id === updated.id ? updated : p));
@@ -1865,7 +1891,9 @@ export default function NorthstoneSystem() {
       );
     }
     const NAV = [
-      { key: "dashboard", label: "Dashboard", icon: LayoutGrid }, { key: "timeline", label: "Timeline", icon: Clock },
+      { key: "dashboard", label: "Dashboard", icon: LayoutGrid },
+      { key: "proposal", label: "Proposal", icon: FileSignature },
+      { key: "timeline", label: "Timeline", icon: Clock },
       { key: "photos", label: "Photos", icon: ImageIcon },
       { key: "visuals", label: "Design Visuals", icon: Boxes },
       { key: "variations", label: "Change Orders", icon: FileSignature },
@@ -1905,6 +1933,7 @@ export default function NorthstoneSystem() {
             <div key={n.key} className="nav-item" onClick={() => setPortalTab(n.key)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 10px", borderRadius: 7, fontSize: 13, marginBottom: 4, cursor: "pointer", background: portalTab === n.key ? "rgba(200,149,47,0.18)" : "transparent", color: portalTab === n.key ? GOLD : "rgba(255,255,255,0.82)", fontWeight: portalTab === n.key ? 700 : 400 }}>
               <n.icon size={15} /> {n.label}
               {n.key === "variations" && pendingVariations.length > 0 && <span style={{ marginLeft: "auto", background: "#c0392b", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 10, padding: "1px 6px" }}>{pendingVariations.length}</span>}
+              {n.key === "proposal" && portalProject.status === "Proposal Sent" && !portalProject.signature?.signed && <span style={{ marginLeft: "auto", background: "#c0392b", color: "#fff", fontSize: 10, fontWeight: 700, borderRadius: 10, padding: "1px 6px" }}>1</span>}
             </div>
           ))}
           <div style={{ marginTop: 18, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.1)" }}>
@@ -1925,6 +1954,13 @@ export default function NorthstoneSystem() {
             </div>
             {ModeSwitch}
           </div>
+
+          {portalTab !== "proposal" && portalProject.status === "Proposal Sent" && !portalProject.signature?.signed && (
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, background: "#fbf1de", border: `1px solid ${GOLD}`, borderRadius: 10, padding: "12px 16px", marginBottom: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600 }}><FileSignature size={16} color={GOLD} /> Your proposal is ready — review and accept it to get started.</div>
+              <button onClick={() => setPortalTab("proposal")} style={{ padding: "8px 14px", background: FOREST, color: "#fff", border: "none", borderRadius: 7, fontSize: 12.5, fontWeight: 700 }}>Review & Accept</button>
+            </div>
+          )}
 
           {portalTab === "dashboard" && (
             <div className="responsive-flex">
@@ -2148,6 +2184,50 @@ export default function NorthstoneSystem() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+
+          {portalTab === "proposal" && (
+            <div style={{ maxWidth: 600 }}>
+              <div style={{ background: "#fff", borderRadius: 12, padding: 24, border: "1px solid #eae6db" }}>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>Your Proposal</div>
+                {["Draft", "Survey Booked"].includes(portalProject.status) ? (
+                  <div style={{ fontSize: 13, color: "#8a887f" }}>Your proposal isn't ready yet — we'll let you know as soon as it's sent over.</div>
+                ) : portalProject.signature?.signed ? (
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: "#e7f0ea", color: "#1f5b3f", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 600, marginBottom: 16 }}>
+                      <ShieldCheck size={16} /> Accepted on {portalProject.signature.date} by {portalProject.signature.clientName}
+                    </div>
+                    <div style={{ fontSize: 13, color: "#555", marginBottom: 16 }}>Total investment: <b style={{ color: INK }}>{gbp(portalTotals.total)}</b></div>
+                    <button onClick={() => safeOpenDoc(() => generateProposalDoc(portalProject, portalTotals, portfolioPhotos))} style={{ padding: "10px 16px", border: "1px solid #ddd8ca", borderRadius: 8, background: "#fff", fontSize: 13 }}>View Proposal Document</button>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{ fontSize: 13, color: "#555", marginBottom: 14 }}>Review your proposal below, then type your full name to accept and sign.</div>
+                    <div style={{ fontSize: 13, color: "#555", marginBottom: 14 }}>Total investment: <b style={{ color: INK }}>{gbp(portalTotals.total)}</b></div>
+                    <button onClick={() => safeOpenDoc(() => generateProposalDoc(portalProject, portalTotals, portfolioPhotos))} style={{ padding: "9px 14px", border: "1px solid #ddd8ca", borderRadius: 8, background: "#fff", fontSize: 12.5, marginBottom: 20 }}>View Full Proposal Document</button>
+
+                    <div style={{ borderTop: "1px solid #f3f1e9", paddingTop: 18 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, marginBottom: 12 }}><FileSignature size={15} color={GOLD} /> Accept Quote</div>
+                      <Field label="Type your full name to sign">
+                        <input style={{ ...inputStyle, width: "100%", fontFamily: "'Playfair Display', serif", fontStyle: "italic", fontSize: 17 }} value={acceptName} onChange={e => setAcceptName(e.target.value)} placeholder="e.g. Jane A. Smith" disabled={accepting} />
+                      </Field>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, margin: "10px 0", cursor: "pointer" }}>
+                        <Checkbox checked={acceptAgreed} onClick={() => setAcceptAgreed(a => !a)} /> I confirm the name above is my legal signature and I accept the terms & conditions of this proposal
+                      </label>
+                      <button
+                        disabled={role === "staff" || !acceptName.trim() || !acceptAgreed || accepting}
+                        onClick={() => acceptQuote(acceptName.trim())}
+                        style={{ width: "100%", padding: 13, background: (role === "staff" || !acceptName.trim() || !acceptAgreed || accepting) ? "#ccc" : FOREST, color: "#fff", border: "none", borderRadius: 9, fontWeight: 700, fontSize: 14 }}
+                      >
+                        {accepting ? "Submitting…" : "I confirm I accept this quote"}
+                      </button>
+                      {role === "staff" && <div style={{ fontSize: 11, color: "#a06a12", marginTop: 8 }}>Staff preview — your client signs this from their own login.</div>}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#8a887f", marginTop: 10 }}><ShieldCheck size={13} /> Secure & legally binding acceptance</div>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

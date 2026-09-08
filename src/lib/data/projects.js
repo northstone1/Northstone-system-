@@ -387,6 +387,38 @@ export async function dismissPortalWelcomeAsClient(projectId) {
 }
 
 // ============================================================
+// Quote acceptance (client-side sign-off) — calls sign_project_proposal(),
+// the security-definer RPC that records the typed name/signature and
+// timestamp and flips status to "Signed" server-side (see
+// supabase/migrations). Returns just the fields the portal UI needs to
+// merge into local state — the RPC returns the full row, not the joined
+// shape mapProjectFromDb expects, since child tables aren't involved.
+// ============================================================
+export async function acceptQuoteAsClient(projectId, typedName) {
+  const { data, error } = await supabase.rpc("sign_project_proposal", {
+    p_project_id: projectId,
+    p_typed_signature: typedName,
+    p_client_name: typedName,
+  });
+  must(error);
+  return {
+    signature: nonEmpty(data.signature, EMPTY_SIGNATURE),
+    status: data.status,
+    referralCode: data.referral_code || null,
+  };
+}
+
+// Fires the admin email notification after a successful acceptQuoteAsClient
+// call. Needs the Resend API key, which is why it's an Edge Function rather
+// than a direct browser call — see supabase/functions/notify-quote-accepted.
+export async function notifyQuoteAccepted(projectId) {
+  const { error } = await supabase.functions.invoke("notify-quote-accepted", {
+    body: { projectId },
+  });
+  if (error) throw error;
+}
+
+// ============================================================
 // Client invite — staff-only, calls the invite-client Edge Function since
 // creating/inviting an auth user needs the service-role key. See
 // supabase/functions/invite-client.
