@@ -162,7 +162,7 @@ const PRICING_CATEGORIES = [
     { id: "porcelain", label: "Porcelain paving", type: "tier", tiers: { Bronze: 120, Signature: 180, Prestige: 250 }, costs: { Bronze: 65, Signature: 100, Prestige: 145 }, unit: "m²", supplier: "nustone" },
     { id: "sandstone", label: "Indian sandstone", type: "tier", tiers: { Bronze: 120, Signature: 160, Prestige: 200 }, costs: { Bronze: 65, Signature: 88, Prestige: 115 }, unit: "m²", estimated: true, supplier: "nustone" },
     { id: "resin", label: "Resin-bound surfacing", type: "fixed", rate: 140, cost: 78, unit: "m²", fromPrice: true, supplier: "durabound" },
-    { id: "tarmac", label: "Tarmac", type: "fixed", rate: 150, cost: 85, unit: "m²", fromPrice: true },
+    { id: "tarmac", label: "Tarmac", type: "fixed", rate: 180, cost: 85, unit: "m²", fromPrice: true },
     { id: "gravel", label: "Gravel driveway", type: "fixed", rate: 80, cost: 42, unit: "m²", fromPrice: true },
   ]},
   { id: "groundworks", name: "Groundworks", items: [
